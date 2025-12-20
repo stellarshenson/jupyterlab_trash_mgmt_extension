@@ -1,0 +1,11 @@
+# Claude Code Journal
+
+This journal tracks substantive work on documents, diagrams, and documentation content.
+
+---
+
+1. **Task - Project initialization** (v0.1.0): Created new JupyterLab extension `jupyterlab_trash_mgmt_extension` for trash/bin management<br>
+   **Result**: Project scaffolded using copier template with TypeScript frontend and Python server extension. Extension provides a dedicated left panel for managing deleted files - empty bin, remove items, restore items, and display storage usage. Core files include `src/index.ts` for frontend plugin activation, `src/request.ts` for server API communication, and `jupyterlab_trash_mgmt_extension/` Python package for server-side handlers. Initialized `.claude/` configuration directory with `CLAUDE.md` importing workspace-level rules and project-specific context. Updated `README.md` with standardized badges and simplified structure following `jupyterlab_terminal_show_in_file_browser_extension` pattern.
+
+2. **Task - Core implementation** (v0.1.0): Implemented complete trash management functionality with sidebar panel<br>
+   **Result**: Backend implementation in `routes.py` provides four REST endpoints using XDG trash specification (`~/.local/share/Trash/`): `GET /list` returns items with name, original path, deletion date, size (formatted), and is_dir flag sorted by deletion date; `POST /restore` moves items back to original location recreating parent directories if needed; `POST /delete` permanently removes individual items; `POST /empty` clears entire trash with error collection. Frontend implementation includes `src/icon.ts` with LabIcon definitions for trash, folder, file, restore, delete, and refresh icons using Material Design SVGs. `src/widget.ts` contains TrashWidget class extending Lumino Widget with header showing item count, total size, refresh and empty buttons; scrollable list with hover-revealed action buttons per item; confirmation dialogs for destructive operations via `@jupyterlab/apputils`. `src/index.ts` registers plugin with ILabShell adding widget to left sidebar at rank 600 with refresh and empty commands. `style/base.css` provides complete styling using JupyterLab CSS variables for theme compatibility. Added dependencies: `@jupyterlab/apputils`, `@jupyterlab/ui-components`, `@lumino/widgets`.
