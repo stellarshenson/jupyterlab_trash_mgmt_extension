@@ -15,3 +15,6 @@ This journal tracks substantive work on documents, diagrams, and documentation c
 
 4. **Task - Icon styling consistency** (v0.4.6): Fixed all icons to use JupyterLab native icon styling<br>
    **Result**: Updated all SVG icons in `src/icon.ts` (trash, folder, file, restore, delete, refresh) to use `class="jp-icon3"` and `fill="#616161"` matching JupyterLab's native icon system. This ensures consistent icon colors across the extension matching other JupyterLab sidebar icons like Extensions and Git. Removed custom CSS overrides for sidebar icon color as the `jp-icon3` class handles theme-aware coloring automatically.
+
+5. **Task - README screenshot** (v0.4.6): Added screenshot and humorous tagline to README<br>
+   **Result**: Added `.resources/screenshot-trash.png` showing the trash panel in action. Updated `README.md` with screenshot displayed after description and before features list. Added self-deprecating humor line about procrastination.

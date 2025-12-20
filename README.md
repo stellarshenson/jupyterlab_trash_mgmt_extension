@@ -10,6 +10,10 @@
 
 A dedicated left panel for managing your JupyterLab trash. See what's taking up space, restore files you need, or empty the bin entirely.
 
+*Because apparently we needed yet another way to procrastinate instead of actually cleaning up our projects.*
+
+![Trash Management Panel](.resources/screenshot-trash.png)
+
 ## Features
 
 - **Trash panel in sidebar** - Accessible alongside file browser, kernels, git, and extensions panels
