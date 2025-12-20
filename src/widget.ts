@@ -1,12 +1,12 @@
 import { Widget } from '@lumino/widgets';
 import { showDialog, Dialog, showErrorMessage } from '@jupyterlab/apputils';
+import { Menu } from '@lumino/widgets';
+import { CommandRegistry } from '@lumino/commands';
 import { requestAPI } from './request';
 import {
   trashIcon,
   folderIcon,
   fileIcon,
-  restoreIcon,
-  deleteIcon,
   refreshIcon
 } from './icon';
 
@@ -27,10 +27,21 @@ interface ITrashListResponse {
   item_count: number;
 }
 
+type SortColumn = 'name' | 'modified' | 'size';
+type SortDirection = 'asc' | 'desc';
+
 export class TrashWidget extends Widget {
   private _header: HTMLDivElement;
+  private _columnHeader: HTMLDivElement;
   private _list: HTMLDivElement;
   private _emptyMessage: HTMLDivElement;
+  private _commands: CommandRegistry;
+  private _contextMenu: Menu;
+  private _selectedItem: ITrashItem | null = null;
+  private _selectedElement: HTMLElement | null = null;
+  private _items: ITrashItem[] = [];
+  private _sortColumn: SortColumn = 'modified';
+  private _sortDirection: SortDirection = 'desc';
 
   constructor() {
     super();
@@ -39,10 +50,31 @@ export class TrashWidget extends Widget {
     this.title.caption = 'Trash';
     this.addClass('jp-TrashPanel');
 
+    // Set up commands for context menu
+    this._commands = new CommandRegistry();
+    this._setupCommands();
+    this._contextMenu = new Menu({ commands: this._commands });
+    this._contextMenu.addItem({ command: 'trash:restore' });
+    this._contextMenu.addItem({ command: 'trash:delete' });
+
+    // Clear selection when menu closes
+    this._contextMenu.aboutToClose.connect(() => {
+      this.node.classList.remove('jp-mod-contextMenuOpen');
+      if (this._selectedElement) {
+        this._selectedElement.classList.remove('jp-mod-selected');
+        this._selectedElement = null;
+      }
+    });
+
     // Create header
     this._header = document.createElement('div');
     this._header.className = 'jp-TrashPanel-header';
     this.node.appendChild(this._header);
+
+    // Create column headers
+    this._columnHeader = document.createElement('div');
+    this._columnHeader.className = 'jp-TrashPanel-columnHeader';
+    this.node.appendChild(this._columnHeader);
 
     // Create list container
     this._list = document.createElement('div');
@@ -60,11 +92,33 @@ export class TrashWidget extends Widget {
     this.refresh();
   }
 
+  private _setupCommands(): void {
+    this._commands.addCommand('trash:restore', {
+      label: 'Restore',
+      execute: () => {
+        if (this._selectedItem) {
+          this._restoreItem(this._selectedItem);
+        }
+      }
+    });
+
+    this._commands.addCommand('trash:delete', {
+      label: 'Delete Permanently',
+      execute: () => {
+        if (this._selectedItem) {
+          this._deleteItem(this._selectedItem);
+        }
+      }
+    });
+  }
+
   async refresh(): Promise<void> {
     try {
       const data = await requestAPI<ITrashListResponse>('list');
+      this._items = data.items;
       this._renderHeader(data);
-      this._renderItems(data.items);
+      this._renderColumnHeader();
+      this._renderItems();
     } catch (error) {
       console.error('Failed to load trash:', error);
       showErrorMessage('Trash Error', 'Failed to load trash contents');
@@ -74,11 +128,10 @@ export class TrashWidget extends Widget {
   private _renderHeader(data: ITrashListResponse): void {
     this._header.innerHTML = '';
 
-    // Size info
-    const sizeInfo = document.createElement('div');
+    // Size info - compact single line
+    const sizeInfo = document.createElement('span');
     sizeInfo.className = 'jp-TrashPanel-header-info';
-    sizeInfo.innerHTML = `<span class="jp-TrashPanel-header-count">${data.item_count} items</span>
-      <span class="jp-TrashPanel-header-size">${data.total_size_formatted}</span>`;
+    sizeInfo.textContent = `${data.item_count} items (${data.total_size_formatted})`;
     this._header.appendChild(sizeInfo);
 
     // Action buttons
@@ -98,7 +151,7 @@ export class TrashWidget extends Widget {
       const emptyBtn = document.createElement('button');
       emptyBtn.className = 'jp-TrashPanel-header-button jp-TrashPanel-header-button-danger';
       emptyBtn.title = 'Empty Trash';
-      emptyBtn.textContent = 'Empty';
+      trashIcon.element({ container: emptyBtn });
       emptyBtn.addEventListener('click', () => this._emptyTrash());
       actions.appendChild(emptyBtn);
     }
@@ -106,19 +159,77 @@ export class TrashWidget extends Widget {
     this._header.appendChild(actions);
   }
 
-  private _renderItems(items: ITrashItem[]): void {
+  private _renderColumnHeader(): void {
+    this._columnHeader.innerHTML = '';
+
+    const createHeader = (label: string, column: SortColumn, className: string) => {
+      const header = document.createElement('span');
+      header.className = `${className} jp-TrashPanel-sortable`;
+      header.textContent = label;
+
+      if (this._sortColumn === column) {
+        const arrow = document.createElement('span');
+        arrow.className = 'jp-TrashPanel-sortArrow';
+        arrow.textContent = this._sortDirection === 'asc' ? ' \u25B2' : ' \u25BC';
+        header.appendChild(arrow);
+      }
+
+      header.addEventListener('click', () => this._handleSort(column));
+      return header;
+    };
+
+    this._columnHeader.appendChild(createHeader('Name', 'name', 'jp-TrashPanel-col-name'));
+    this._columnHeader.appendChild(createHeader('Modified', 'modified', 'jp-TrashPanel-col-modified'));
+    this._columnHeader.appendChild(createHeader('Size', 'size', 'jp-TrashPanel-col-size'));
+  }
+
+  private _handleSort(column: SortColumn): void {
+    if (this._sortColumn === column) {
+      this._sortDirection = this._sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+      this._sortColumn = column;
+      this._sortDirection = column === 'name' ? 'asc' : 'desc';
+    }
+    this._renderColumnHeader();
+    this._renderItems();
+  }
+
+  private _getSortedItems(): ITrashItem[] {
+    const items = [...this._items];
+    const dir = this._sortDirection === 'asc' ? 1 : -1;
+
+    items.sort((a, b) => {
+      switch (this._sortColumn) {
+        case 'name':
+          return dir * a.name.localeCompare(b.name);
+        case 'modified':
+          return dir * a.deletion_date.localeCompare(b.deletion_date);
+        case 'size':
+          return dir * (a.size - b.size);
+        default:
+          return 0;
+      }
+    });
+
+    return items;
+  }
+
+  private _renderItems(): void {
     this._list.innerHTML = '';
 
-    if (items.length === 0) {
+    if (this._items.length === 0) {
       this._emptyMessage.style.display = 'flex';
+      this._columnHeader.style.display = 'none';
       this._list.style.display = 'none';
       return;
     }
 
     this._emptyMessage.style.display = 'none';
+    this._columnHeader.style.display = 'flex';
     this._list.style.display = 'block';
 
-    for (const item of items) {
+    const sortedItems = this._getSortedItems();
+    for (const item of sortedItems) {
       const itemEl = this._createItemElement(item);
       this._list.appendChild(itemEl);
     }
@@ -127,64 +238,97 @@ export class TrashWidget extends Widget {
   private _createItemElement(item: ITrashItem): HTMLDivElement {
     const itemEl = document.createElement('div');
     itemEl.className = 'jp-TrashPanel-item';
+    itemEl.title = item.original_path;
 
-    // Icon
-    const iconEl = document.createElement('div');
+    // Icon + Name column
+    const nameCol = document.createElement('span');
+    nameCol.className = 'jp-TrashPanel-col-name';
+
+    const iconEl = document.createElement('span');
     iconEl.className = 'jp-TrashPanel-item-icon';
     if (item.is_dir) {
       folderIcon.element({ container: iconEl });
     } else {
       fileIcon.element({ container: iconEl });
     }
-    itemEl.appendChild(iconEl);
+    nameCol.appendChild(iconEl);
 
-    // Content
-    const contentEl = document.createElement('div');
-    contentEl.className = 'jp-TrashPanel-item-content';
-
-    const nameEl = document.createElement('div');
+    const nameEl = document.createElement('span');
     nameEl.className = 'jp-TrashPanel-item-name';
     nameEl.textContent = item.name;
-    nameEl.title = item.original_path;
-    contentEl.appendChild(nameEl);
+    nameCol.appendChild(nameEl);
 
-    const metaEl = document.createElement('div');
-    metaEl.className = 'jp-TrashPanel-item-meta';
-    const dateStr = this._formatDate(item.deletion_date);
-    metaEl.textContent = `${item.size_formatted} - ${dateStr}`;
-    contentEl.appendChild(metaEl);
+    itemEl.appendChild(nameCol);
 
-    itemEl.appendChild(contentEl);
+    // Modified column
+    const modifiedCol = document.createElement('span');
+    modifiedCol.className = 'jp-TrashPanel-col-modified';
+    modifiedCol.textContent = this._formatRelativeTime(item.deletion_date);
+    modifiedCol.title = this._formatDate(item.deletion_date);
+    itemEl.appendChild(modifiedCol);
 
-    // Actions
-    const actionsEl = document.createElement('div');
-    actionsEl.className = 'jp-TrashPanel-item-actions';
+    // Size column
+    const sizeCol = document.createElement('span');
+    sizeCol.className = 'jp-TrashPanel-col-size';
+    sizeCol.textContent = item.size_formatted;
+    itemEl.appendChild(sizeCol);
 
-    // Restore button
-    const restoreBtn = document.createElement('button');
-    restoreBtn.className = 'jp-TrashPanel-item-button';
-    restoreBtn.title = 'Restore';
-    restoreIcon.element({ container: restoreBtn });
-    restoreBtn.addEventListener('click', e => {
+    // Context menu
+    itemEl.addEventListener('contextmenu', e => {
+      e.preventDefault();
       e.stopPropagation();
-      this._restoreItem(item);
-    });
-    actionsEl.appendChild(restoreBtn);
 
-    // Delete button
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'jp-TrashPanel-item-button jp-TrashPanel-item-button-danger';
-    deleteBtn.title = 'Delete Permanently';
-    deleteIcon.element({ container: deleteBtn });
-    deleteBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      this._deleteItem(item);
-    });
-    actionsEl.appendChild(deleteBtn);
+      // Clear previous selection
+      if (this._selectedElement) {
+        this._selectedElement.classList.remove('jp-mod-selected');
+      }
 
-    itemEl.appendChild(actionsEl);
+      // Set new selection
+      this._selectedItem = item;
+      this._selectedElement = itemEl;
+      itemEl.classList.add('jp-mod-selected');
+      this.node.classList.add('jp-mod-contextMenuOpen');
+
+      this._contextMenu.open(e.clientX, e.clientY);
+    });
 
     return itemEl;
+  }
+
+  private _formatRelativeTime(isoDate: string): string {
+    if (!isoDate) {
+      return '';
+    }
+    try {
+      const date = new Date(isoDate);
+      const now = new Date();
+      const diffMs = now.getTime() - date.getTime();
+      const diffSecs = Math.floor(diffMs / 1000);
+      const diffMins = Math.floor(diffSecs / 60);
+      const diffHours = Math.floor(diffMins / 60);
+      const diffDays = Math.floor(diffHours / 24);
+      const diffWeeks = Math.floor(diffDays / 7);
+      const diffMonths = Math.floor(diffDays / 30);
+      const diffYears = Math.floor(diffDays / 365);
+
+      if (diffSecs < 60) {
+        return 'just now';
+      } else if (diffMins < 60) {
+        return diffMins === 1 ? '1 minute ago' : `${diffMins} minutes ago`;
+      } else if (diffHours < 24) {
+        return diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`;
+      } else if (diffDays < 7) {
+        return diffDays === 1 ? 'yesterday' : `${diffDays} days ago`;
+      } else if (diffWeeks < 4) {
+        return diffWeeks === 1 ? '1 week ago' : `${diffWeeks} weeks ago`;
+      } else if (diffMonths < 12) {
+        return diffMonths === 1 ? '1 month ago' : `${diffMonths} months ago`;
+      } else {
+        return diffYears === 1 ? '1 year ago' : `${diffYears} years ago`;
+      }
+    } catch {
+      return '';
+    }
   }
 
   private _formatDate(isoDate: string): string {
@@ -193,11 +337,7 @@ export class TrashWidget extends Widget {
     }
     try {
       const date = new Date(isoDate);
-      return date.toLocaleDateString(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
-      });
+      return date.toLocaleString();
     } catch {
       return isoDate;
     }
