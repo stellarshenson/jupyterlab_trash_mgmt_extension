@@ -2,11 +2,6 @@
     Trash Management Panel Styles - File Browser Style
 */
 
-/* Sidebar tab icon - always use lighter color (same as active state) */
-.jp-SideBar .lm-TabBar-tabIcon svg[data-icon="trash-mgmt:trash"] path {
-  fill: var(--jp-inverse-layout-color0);
-}
-
 /* Panel container */
 .jp-TrashPanel {
   display: flex;
