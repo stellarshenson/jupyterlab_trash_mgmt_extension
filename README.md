@@ -10,8 +10,6 @@
 
 A dedicated left panel for managing your JupyterLab trash. See what's taking up space, restore files you need, or empty the bin entirely.
 
-*Because apparently we needed yet another way to procrastinate instead of actually cleaning up our projects.*
-
 ![Trash Management Panel](.resources/screenshot-trash.png)
 
 ## Features
@@ -35,3 +33,7 @@ pip install jupyterlab_trash_mgmt_extension
 ```bash
 pip uninstall jupyterlab_trash_mgmt_extension
 ```
+
+---
+
+*This extension was born from the existential dread of watching 47GB of virtual environments slowly consume your disk space while you convince yourself you'll "definitely need that project from 2019 someday." It won't bring back your deleted thesis draft, fix your impostor syndrome, or explain why you have twelve copies of `untitled.ipynb` - but at least now you can watch your poor life choices accumulate in a nicely formatted sidebar panel.*
