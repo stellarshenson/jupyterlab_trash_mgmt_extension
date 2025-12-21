@@ -1,15 +1,15 @@
 {
     "name": "jupyterlab_trash_mgmt_extension",
-    "version": "0.4.7",
+    "version": "1.0.2",
     "description": "Jupyterlab extension to introduce new left panel (along with browser, kernels, git, extensions) to allow management of trash - that is, empty bin, remove item from trash, restore item and show how much space items in the trash take",
     "keywords": [
         "jupyter",
         "jupyterlab",
         "jupyterlab-extension"
     ],
-    "homepage": "",
+    "homepage": "https://github.com/stellarshenson/jupyterlab_trash_mgmt_extension",
     "bugs": {
-        "url": "/issues"
+        "url": "https://github.com/stellarshenson/jupyterlab_trash_mgmt_extension/issues"
     },
     "license": "BSD-3-Clause",
     "author": {
@@ -26,7 +26,7 @@
     "style": "style/index.css",
     "repository": {
         "type": "git",
-        "url": ".git"
+        "url": "https://github.com/stellarshenson/jupyterlab_trash_mgmt_extension.git"
     },
     "scripts": {
         "build": "jlpm build:lib && jlpm build:labextension:dev",
