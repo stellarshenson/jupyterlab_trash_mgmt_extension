@@ -37,6 +37,8 @@ export class TrashWidget extends Widget {
   private _items: ITrashItem[] = [];
   private _sortColumn: SortColumn = 'modified';
   private _sortDirection: SortDirection = 'desc';
+  private _tooltip: HTMLDivElement;
+  private _tooltipTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     super();
@@ -82,6 +84,11 @@ export class TrashWidget extends Widget {
     this._emptyMessage.textContent = 'Trash is empty';
     this._emptyMessage.style.display = 'none';
     this.node.appendChild(this._emptyMessage);
+
+    // Create tooltip element
+    this._tooltip = document.createElement('div');
+    this._tooltip.className = 'jp-TrashPanel-tooltip';
+    document.body.appendChild(this._tooltip);
 
     // Initial load
     this.refresh();
@@ -245,7 +252,25 @@ export class TrashWidget extends Widget {
   private _createItemElement(item: ITrashItem): HTMLDivElement {
     const itemEl = document.createElement('div');
     itemEl.className = 'jp-TrashPanel-item';
-    itemEl.title = item.original_path;
+
+    // Tooltip on hover with delay
+    itemEl.addEventListener('mouseenter', e => {
+      this._tooltipTimeout = setTimeout(() => {
+        this._tooltip.textContent = `Original: ${item.original_path}`;
+        this._tooltip.style.display = 'block';
+        const rect = itemEl.getBoundingClientRect();
+        this._tooltip.style.left = `${rect.left}px`;
+        this._tooltip.style.top = `${rect.bottom + 4}px`;
+      }, 500);
+    });
+
+    itemEl.addEventListener('mouseleave', () => {
+      if (this._tooltipTimeout) {
+        clearTimeout(this._tooltipTimeout);
+        this._tooltipTimeout = null;
+      }
+      this._tooltip.style.display = 'none';
+    });
 
     // Icon + Name column
     const nameCol = document.createElement('span');

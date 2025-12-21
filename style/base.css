@@ -206,3 +206,20 @@
   font-size: var(--jp-ui-font-size0);
   padding: 12px;
 }
+
+/* Hover tooltip */
+.jp-TrashPanel-tooltip {
+  display: none;
+  position: fixed;
+  z-index: 10000;
+  max-width: 400px;
+  padding: 6px 10px;
+  background: var(--jp-layout-color3);
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 4px;
+  font-size: var(--jp-ui-font-size0);
+  color: var(--jp-ui-font-color1);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 15%);
+  word-break: break-all;
+  pointer-events: none;
+}
