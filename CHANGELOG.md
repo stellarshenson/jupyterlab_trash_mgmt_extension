@@ -2,6 +2,10 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## 1.0.7
+
+- Fixed package-lock.json formatting for CI
+
 ## 1.0.6
 
 - Multi-line hover tooltip showing original path, type, size, and deletion date

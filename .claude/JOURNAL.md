@@ -33,3 +33,6 @@ This journal tracks substantive work on documents, diagrams, and documentation c
 
 10. **Task - First public release** (v1.0.6): Published extension to PyPI and npm<br>
     **Result**: Ran `make publish` which built and published packages to both registries. Updated `CHANGELOG.md` with version history documenting features from v0.4.6 through v1.0.6.
+
+11. **Task - CI fix release** (v1.0.7): Fixed package-lock.json formatting and published<br>
+    **Result**: Fixed prettier formatting issue in `package-lock.json` that was failing CI lint check. Published v1.0.7 to PyPI and npm.
