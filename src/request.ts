@@ -44,3 +44,19 @@ export async function requestAPI<T>(
 
   return data;
 }
+
+/**
+ * Check if trash functionality is enabled on the server
+ *
+ * @returns Promise resolving to true if trash is enabled
+ */
+export async function isTrashEnabled(): Promise<boolean> {
+  try {
+    const response = await requestAPI<{ trash_enabled: boolean }>('status');
+    return response.trash_enabled;
+  } catch (error) {
+    console.warn('Failed to check trash status:', error);
+    // Default to true if we can't determine (backwards compatibility)
+    return true;
+  }
+}

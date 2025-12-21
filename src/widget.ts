@@ -3,12 +3,7 @@ import { showDialog, Dialog, showErrorMessage } from '@jupyterlab/apputils';
 import { Menu } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
 import { requestAPI } from './request';
-import {
-  trashIcon,
-  folderIcon,
-  fileIcon,
-  refreshIcon
-} from './icon';
+import { trashIcon, folderIcon, fileIcon, refreshIcon } from './icon';
 
 interface ITrashItem {
   name: string;
@@ -149,7 +144,8 @@ export class TrashWidget extends Widget {
     // Empty trash button
     if (data.item_count > 0) {
       const emptyBtn = document.createElement('button');
-      emptyBtn.className = 'jp-TrashPanel-header-button jp-TrashPanel-header-button-danger';
+      emptyBtn.className =
+        'jp-TrashPanel-header-button jp-TrashPanel-header-button-danger';
       emptyBtn.title = 'Empty Trash';
       trashIcon.element({ container: emptyBtn });
       emptyBtn.addEventListener('click', () => this._emptyTrash());
@@ -162,7 +158,11 @@ export class TrashWidget extends Widget {
   private _renderColumnHeader(): void {
     this._columnHeader.innerHTML = '';
 
-    const createHeader = (label: string, column: SortColumn, className: string) => {
+    const createHeader = (
+      label: string,
+      column: SortColumn,
+      className: string
+    ) => {
       const header = document.createElement('span');
       header.className = `${className} jp-TrashPanel-sortable`;
       header.textContent = label;
@@ -170,7 +170,8 @@ export class TrashWidget extends Widget {
       if (this._sortColumn === column) {
         const arrow = document.createElement('span');
         arrow.className = 'jp-TrashPanel-sortArrow';
-        arrow.textContent = this._sortDirection === 'asc' ? ' \u25B2' : ' \u25BC';
+        arrow.textContent =
+          this._sortDirection === 'asc' ? ' \u25B2' : ' \u25BC';
         header.appendChild(arrow);
       }
 
@@ -178,9 +179,15 @@ export class TrashWidget extends Widget {
       return header;
     };
 
-    this._columnHeader.appendChild(createHeader('Name', 'name', 'jp-TrashPanel-col-name'));
-    this._columnHeader.appendChild(createHeader('Modified', 'modified', 'jp-TrashPanel-col-modified'));
-    this._columnHeader.appendChild(createHeader('Size', 'size', 'jp-TrashPanel-col-size'));
+    this._columnHeader.appendChild(
+      createHeader('Name', 'name', 'jp-TrashPanel-col-name')
+    );
+    this._columnHeader.appendChild(
+      createHeader('Modified', 'modified', 'jp-TrashPanel-col-modified')
+    );
+    this._columnHeader.appendChild(
+      createHeader('Size', 'size', 'jp-TrashPanel-col-size')
+    );
   }
 
   private _handleSort(column: SortColumn): void {
@@ -381,7 +388,10 @@ export class TrashWidget extends Widget {
     const result = await showDialog({
       title: 'Empty Trash',
       body: 'Are you sure you want to permanently delete all items in the trash? This cannot be undone.',
-      buttons: [Dialog.cancelButton(), Dialog.warnButton({ label: 'Empty Trash' })]
+      buttons: [
+        Dialog.cancelButton(),
+        Dialog.warnButton({ label: 'Empty Trash' })
+      ]
     });
 
     if (result.button.accept) {

@@ -1,1 +1,1 @@
-"""Python unit tests for jupyterlab_trash_mgmt_extension."""
+"""Tests for jupyterlab_trash_mgmt_extension."""

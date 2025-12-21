@@ -60,12 +60,27 @@ def parse_trashinfo(info_path: Path) -> dict:
         config = ConfigParser()
         config.read(info_path)
         if config.has_section('Trash Info'):
-            path = config.get('Trash Info', 'Path', fallback='')
+            # Use raw=True to prevent interpolation of % characters in URL-encoded paths
+            path = config.get('Trash Info', 'Path', fallback='', raw=True)
             result['original_path'] = urllib.parse.unquote(path)
-            result['deletion_date'] = config.get('Trash Info', 'DeletionDate', fallback='')
+            result['deletion_date'] = config.get('Trash Info', 'DeletionDate', fallback='', raw=True)
     except Exception:
         pass
     return result
+
+
+class TrashStatusHandler(APIHandler):
+    """Handler for checking if trash functionality is enabled."""
+
+    @tornado.web.authenticated
+    def get(self):
+        # Check if FileContentsManager.delete_to_trash is enabled
+        contents_manager = self.settings.get('contents_manager')
+        trash_enabled = getattr(contents_manager, 'delete_to_trash', False) if contents_manager else False
+
+        self.finish(json.dumps({
+            'trash_enabled': trash_enabled
+        }))
 
 
 class TrashListHandler(APIHandler):
@@ -261,6 +276,7 @@ def setup_route_handlers(web_app):
     base_route = url_path_join(base_url, "jupyterlab-trash-mgmt-extension")
 
     handlers = [
+        (url_path_join(base_route, "status"), TrashStatusHandler),
         (url_path_join(base_route, "list"), TrashListHandler),
         (url_path_join(base_route, "restore"), TrashRestoreHandler),
         (url_path_join(base_route, "delete"), TrashDeleteHandler),

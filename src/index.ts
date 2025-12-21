@@ -4,6 +4,7 @@ import {
   JupyterFrontEndPlugin
 } from '@jupyterlab/application';
 
+import { isTrashEnabled } from './request';
 import { TrashWidget } from './widget';
 
 /**
@@ -23,10 +24,19 @@ const plugin: JupyterFrontEndPlugin<void> = {
     'JupyterLab extension for trash management with a dedicated sidebar panel',
   autoStart: true,
   requires: [ILabShell],
-  activate: (app: JupyterFrontEnd, labShell: ILabShell) => {
+  activate: async (app: JupyterFrontEnd, labShell: ILabShell) => {
     console.log(
       'JupyterLab extension jupyterlab_trash_mgmt_extension is activated!'
     );
+
+    // Check if trash functionality is enabled on the server
+    const trashEnabled = await isTrashEnabled();
+    if (!trashEnabled) {
+      console.log(
+        'Trash functionality is disabled (delete_to_trash=False). Trash panel will not be shown.'
+      );
+      return;
+    }
 
     const { commands } = app;
 

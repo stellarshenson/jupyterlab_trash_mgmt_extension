@@ -89,3 +89,11 @@ before-build-python = ["jlpm clean:all"]
 
 [tool.check-wheel-contents]
 ignore = ["W002"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+check_links_ignore = [
+    "https://pepy.tech/.*",
+    "https://static.pepy.tech/.*",
+    "https://www.npmjs.com/.*"
+]

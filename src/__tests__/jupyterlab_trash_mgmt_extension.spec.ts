@@ -1,9 +1,10 @@
 /**
- * Example of [Jest](https://jestjs.io/docs/getting-started) unit tests
+ * Unit tests for jupyterlab_trash_mgmt_extension
  */
 
 describe('jupyterlab_trash_mgmt_extension', () => {
   it('should be tested', () => {
-    expect(1 + 1).toEqual(2);
+    // Placeholder test - extension activation is tested via integration tests
+    expect(1 + 1).toBe(2);
   });
 });

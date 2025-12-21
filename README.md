@@ -36,4 +36,4 @@ pip uninstall jupyterlab_trash_mgmt_extension
 
 ---
 
-*This extension was born from the existential dread of watching 47GB of virtual environments slowly consume your disk space while you convince yourself you'll "definitely need that project from 2019 someday." It won't bring back your deleted thesis draft, fix your impostor syndrome, or explain why you have twelve copies of `untitled.ipynb` - but at least now you can watch your poor life choices accumulate in a nicely formatted sidebar panel.*
+_This extension was born from the existential dread of watching 47GB of virtual environments slowly consume your disk space while you convince yourself you'll "definitely need that project from 2019 someday." It won't bring back your deleted thesis draft, fix your impostor syndrome, or explain why you have twelve copies of `untitled.ipynb` - but at least now you can watch your poor life choices accumulate in a nicely formatted sidebar panel._

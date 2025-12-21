@@ -132,7 +132,9 @@
 }
 
 /* Disable hover on other items when context menu is open */
-.jp-TrashPanel.jp-mod-contextMenuOpen .jp-TrashPanel-list .jp-TrashPanel-item:not(.jp-mod-selected):hover {
+.jp-TrashPanel.jp-mod-contextMenuOpen
+  .jp-TrashPanel-list
+  .jp-TrashPanel-item:not(.jp-mod-selected):hover {
   background-color: var(--jp-layout-color1);
 }
 
