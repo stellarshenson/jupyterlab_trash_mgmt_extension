@@ -30,3 +30,6 @@ This journal tracks substantive work on documents, diagrams, and documentation c
 
 9. **Task - Hover tooltip with file details** (v1.0.5): Added native tooltip showing original path, type, size, and deletion date<br>
    **Result**: Updated `_createItemElement()` in `src/widget.ts` to set multi-line `title` attribute with original path, type (File/Folder), size, and deletion date/time. Uses native browser tooltip for simplicity. Each field on separate line using `\n` joined array.
+
+10. **Task - First public release** (v1.0.6): Published extension to PyPI and npm<br>
+    **Result**: Ran `make publish` which built and published packages to both registries. Updated `CHANGELOG.md` with version history documenting features from v0.4.6 through v1.0.6.
