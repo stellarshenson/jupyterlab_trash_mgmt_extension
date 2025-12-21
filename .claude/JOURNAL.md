@@ -28,5 +28,5 @@ This journal tracks substantive work on documents, diagrams, and documentation c
 8. **Task - Version bump and CI fix** (v1.0.2): Updated version and fixed package.json repository URL for jupyter_releaser<br>
    **Result**: Bumped version from 0.4.7 to 1.0.2 in `package.json`. Fixed jupyter_releaser CI failure by updating incomplete URLs: `homepage` set to GitHub repo URL, `bugs.url` set to issues URL, `repository.url` set to full git URL. The releaser requires these fields to match the cloned repository for npm package validation.
 
-9. **Task - Hover tooltip for original path** (v1.0.3): Added delayed hover tooltip showing original file location<br>
-   **Result**: Implemented custom tooltip in `src/widget.ts` that appears after 500ms hover delay showing "Original: /path/to/file". Added `_tooltip` and `_tooltipTimeout` private members, tooltip element appended to document body, mouseenter/mouseleave handlers on item rows. Added `.jp-TrashPanel-tooltip` CSS class with fixed positioning, z-index 10000, and styled appearance matching JupyterLab theme.
+9. **Task - Hover tooltip with file details** (v1.0.5): Added native tooltip showing original path, type, size, and deletion date<br>
+   **Result**: Updated `_createItemElement()` in `src/widget.ts` to set multi-line `title` attribute with original path, type (File/Folder), size, and deletion date/time. Uses native browser tooltip for simplicity. Each field on separate line using `\n` joined array.
