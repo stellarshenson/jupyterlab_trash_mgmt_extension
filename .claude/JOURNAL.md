@@ -36,3 +36,6 @@ This journal tracks substantive work on documents, diagrams, and documentation c
 
 11. **Task - CI fix release** (v1.0.7): Fixed package-lock.json formatting and published<br>
     **Result**: Fixed prettier formatting issue in `package-lock.json` that was failing CI lint check. Published v1.0.7 to PyPI and npm.
+
+12. **Task - Auto-refresh when visible** (v1.0.9): Added automatic trash panel refresh with visibility-aware polling<br>
+    **Result**: Updated `src/widget.ts` to auto-refresh trash contents when panel is visible. Added `REFRESH_INTERVAL_MS` constant (10 seconds = 1/6 minute). Implemented `_startAutoRefresh()` and `_stopAutoRefresh()` private methods managing interval timer. Overrode Lumino lifecycle methods: `onAfterShow()` refreshes immediately and starts polling, `onBeforeHide()` stops polling, `dispose()` cleans up timer. Imported `Message` from `@lumino/messaging` for lifecycle method signatures. Removed initial `refresh()` call from constructor since `onAfterShow()` handles first load. This optimization ensures no API calls when panel is hidden/closed - polling only occurs when trash panel is actively visible.

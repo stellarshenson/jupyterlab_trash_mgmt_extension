@@ -2,8 +2,12 @@ import { Widget } from '@lumino/widgets';
 import { showDialog, Dialog, showErrorMessage } from '@jupyterlab/apputils';
 import { Menu } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
+import { Message } from '@lumino/messaging';
 import { requestAPI } from './request';
 import { trashIcon, folderIcon, fileIcon, refreshIcon } from './icon';
+
+// Auto-refresh interval: 1/6 minute = 10 seconds
+const REFRESH_INTERVAL_MS = 10000;
 
 interface ITrashItem {
   name: string;
@@ -37,6 +41,7 @@ export class TrashWidget extends Widget {
   private _items: ITrashItem[] = [];
   private _sortColumn: SortColumn = 'modified';
   private _sortDirection: SortDirection = 'desc';
+  private _refreshIntervalId: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     super();
@@ -83,8 +88,7 @@ export class TrashWidget extends Widget {
     this._emptyMessage.style.display = 'none';
     this.node.appendChild(this._emptyMessage);
 
-    // Initial load
-    this.refresh();
+    // Note: Initial load is handled in onAfterShow() when panel becomes visible
   }
 
   private _setupCommands(): void {
@@ -410,5 +414,50 @@ export class TrashWidget extends Widget {
         showErrorMessage('Empty Trash Failed', message);
       }
     }
+  }
+
+  /**
+   * Start auto-refresh interval.
+   */
+  private _startAutoRefresh(): void {
+    this._stopAutoRefresh();
+    this._refreshIntervalId = setInterval(() => {
+      this.refresh();
+    }, REFRESH_INTERVAL_MS);
+  }
+
+  /**
+   * Stop auto-refresh interval.
+   */
+  private _stopAutoRefresh(): void {
+    if (this._refreshIntervalId !== null) {
+      clearInterval(this._refreshIntervalId);
+      this._refreshIntervalId = null;
+    }
+  }
+
+  /**
+   * Handle `after-show` messages - refresh and start auto-refresh.
+   */
+  protected onAfterShow(msg: Message): void {
+    super.onAfterShow(msg);
+    this.refresh();
+    this._startAutoRefresh();
+  }
+
+  /**
+   * Handle `before-hide` messages - stop auto-refresh.
+   */
+  protected onBeforeHide(msg: Message): void {
+    this._stopAutoRefresh();
+    super.onBeforeHide(msg);
+  }
+
+  /**
+   * Dispose of the widget and clean up resources.
+   */
+  dispose(): void {
+    this._stopAutoRefresh();
+    super.dispose();
   }
 }
