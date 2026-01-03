@@ -1,5 +1,10 @@
 import { Widget } from '@lumino/widgets';
-import { showDialog, Dialog, showErrorMessage } from '@jupyterlab/apputils';
+import {
+  showDialog,
+  Dialog,
+  showErrorMessage,
+  Spinner
+} from '@jupyterlab/apputils';
 import { Menu } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
 import { Message } from '@lumino/messaging';
@@ -42,6 +47,7 @@ export class TrashWidget extends Widget {
   private _sortColumn: SortColumn = 'modified';
   private _sortDirection: SortDirection = 'desc';
   private _refreshIntervalId: ReturnType<typeof setInterval> | null = null;
+  private _spinner: Spinner;
 
   constructor() {
     super();
@@ -88,6 +94,12 @@ export class TrashWidget extends Widget {
     this._emptyMessage.style.display = 'none';
     this.node.appendChild(this._emptyMessage);
 
+    // Create spinner for loading states
+    this._spinner = new Spinner();
+    this._spinner.addClass('jp-TrashPanel-spinner');
+    this._spinner.hide();
+    this.node.appendChild(this._spinner.node);
+
     // Note: Initial load is handled in onAfterShow() when panel becomes visible
   }
 
@@ -112,6 +124,7 @@ export class TrashWidget extends Widget {
   }
 
   async refresh(): Promise<void> {
+    this._spinner.show();
     try {
       const data = await requestAPI<ITrashListResponse>('list');
       this._items = data.items;
@@ -121,6 +134,8 @@ export class TrashWidget extends Widget {
     } catch (error) {
       console.error('Failed to load trash:', error);
       showErrorMessage('Trash Error', 'Failed to load trash contents');
+    } finally {
+      this._spinner.hide();
     }
   }
 
@@ -360,6 +375,7 @@ export class TrashWidget extends Widget {
   }
 
   private async _restoreItem(item: ITrashItem): Promise<void> {
+    this._spinner.show();
     try {
       await requestAPI<{ success: boolean; restored_to: string }>('restore', {
         method: 'POST',
@@ -369,6 +385,8 @@ export class TrashWidget extends Widget {
     } catch (error: any) {
       const message = error?.message || 'Failed to restore item';
       showErrorMessage('Restore Failed', message);
+    } finally {
+      this._spinner.hide();
     }
   }
 
@@ -380,6 +398,7 @@ export class TrashWidget extends Widget {
     });
 
     if (result.button.accept) {
+      this._spinner.show();
       try {
         await requestAPI<{ success: boolean }>('delete', {
           method: 'POST',
@@ -389,6 +408,8 @@ export class TrashWidget extends Widget {
       } catch (error: any) {
         const message = error?.message || 'Failed to delete item';
         showErrorMessage('Delete Failed', message);
+      } finally {
+        this._spinner.hide();
       }
     }
   }
@@ -404,6 +425,7 @@ export class TrashWidget extends Widget {
     });
 
     if (result.button.accept) {
+      this._spinner.show();
       try {
         await requestAPI<{ success: boolean; deleted_count: number }>('empty', {
           method: 'POST'
@@ -412,6 +434,8 @@ export class TrashWidget extends Widget {
       } catch (error: any) {
         const message = error?.message || 'Failed to empty trash';
         showErrorMessage('Empty Trash Failed', message);
+      } finally {
+        this._spinner.hide();
       }
     }
   }
@@ -458,6 +482,7 @@ export class TrashWidget extends Widget {
    */
   dispose(): void {
     this._stopAutoRefresh();
+    this._spinner.dispose();
     super.dispose();
   }
 }

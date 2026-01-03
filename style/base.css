@@ -10,6 +10,7 @@
   background: var(--jp-layout-color1);
   color: var(--jp-ui-font-color1);
   font-size: var(--jp-ui-font-size1);
+  position: relative;
 }
 
 /* Header section - compact */
@@ -205,4 +206,16 @@
   color: var(--jp-ui-font-color3);
   font-size: var(--jp-ui-font-size0);
   padding: 12px;
+}
+
+/* Spinner overlay */
+.jp-TrashPanel-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--jp-layout-color1);
+  opacity: 0.8;
+  z-index: 10;
 }
