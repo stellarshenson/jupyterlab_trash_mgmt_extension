@@ -42,3 +42,6 @@ This journal tracks substantive work on documents, diagrams, and documentation c
 
 13. **Task - Loading spinner overlay** (v1.1.1): Added JupyterLab spinner during async operations<br>
     **Result**: Imported `Spinner` from `@jupyterlab/apputils` and added `_spinner` private field to TrashWidget. Spinner is initialized in constructor, added to widget node, and disposed on cleanup. Updated four async methods to show spinner before operation and hide in `finally` block: `refresh()`, `_restoreItem()`, `_deleteItem()`, and `_emptyTrash()`. Added CSS in `style/base.css`: `.jp-TrashPanel-spinner` uses absolute positioning to overlay the panel with semi-transparent background (opacity 0.8) and z-index 10. Added `position: relative` to `.jp-TrashPanel` container for proper absolute positioning context.
+
+14. **Task - Non-blocking auto-refresh** (v1.1.3): Spinner only for user actions, background auto-refresh<br>
+    **Result**: Refactored refresh logic into three methods: `refresh()` shows spinner for user-initiated actions (button click, initial load), `_refreshInBackground()` silently refreshes without spinner for auto-refresh, and `_loadTrashContents()` contains shared API call and render logic. Updated `_startAutoRefresh()` to call `_refreshInBackground()` instead of `refresh()`. Auto-refresh now runs non-blocking in background without visual feedback.

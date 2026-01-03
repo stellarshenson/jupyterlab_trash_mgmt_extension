@@ -126,17 +126,35 @@ export class TrashWidget extends Widget {
   async refresh(): Promise<void> {
     this._spinner.show();
     try {
-      const data = await requestAPI<ITrashListResponse>('list');
-      this._items = data.items;
-      this._renderHeader(data);
-      this._renderColumnHeader();
-      this._renderItems();
+      await this._loadTrashContents();
     } catch (error) {
       console.error('Failed to load trash:', error);
       showErrorMessage('Trash Error', 'Failed to load trash contents');
     } finally {
       this._spinner.hide();
     }
+  }
+
+  /**
+   * Background refresh without spinner - used for auto-refresh.
+   */
+  private async _refreshInBackground(): Promise<void> {
+    try {
+      await this._loadTrashContents();
+    } catch (error) {
+      console.error('Failed to load trash:', error);
+    }
+  }
+
+  /**
+   * Load trash contents from API and render.
+   */
+  private async _loadTrashContents(): Promise<void> {
+    const data = await requestAPI<ITrashListResponse>('list');
+    this._items = data.items;
+    this._renderHeader(data);
+    this._renderColumnHeader();
+    this._renderItems();
   }
 
   private _renderHeader(data: ITrashListResponse): void {
@@ -446,7 +464,7 @@ export class TrashWidget extends Widget {
   private _startAutoRefresh(): void {
     this._stopAutoRefresh();
     this._refreshIntervalId = setInterval(() => {
-      this.refresh();
+      this._refreshInBackground();
     }, REFRESH_INTERVAL_MS);
   }
 
