@@ -30,7 +30,12 @@ def get_dir_size(path: Path) -> int:
 
 
 def get_item_size(path: Path) -> int:
-    """Get size of file or directory."""
+    """Get size of file or directory. Handles symlinks by reporting link size."""
+    if path.is_symlink():
+        try:
+            return path.lstat().st_size
+        except (PermissionError, OSError):
+            return 0
     if path.is_dir():
         return get_dir_size(path)
     try:
@@ -104,6 +109,10 @@ class TrashListHandler(APIHandler):
                     size = get_item_size(entry)
                     total_size += size
 
+                    # For symlinks, check if target is dir without following broken links
+                    is_dir = entry.is_dir() if not entry.is_symlink() else entry.is_dir()
+                    is_symlink = entry.is_symlink()
+
                     items.append({
                         'name': entry.name,
                         'trash_path': entry.name,
@@ -111,7 +120,8 @@ class TrashListHandler(APIHandler):
                         'deletion_date': metadata.get('deletion_date', ''),
                         'size': size,
                         'size_formatted': format_size(size),
-                        'is_dir': entry.is_dir()
+                        'is_dir': is_dir,
+                        'is_symlink': is_symlink
                     })
                 except (PermissionError, OSError):
                     continue
@@ -147,7 +157,7 @@ class TrashRestoreHandler(APIHandler):
         source = files_dir / trash_path
         info_file = info_dir / f"{trash_path}.trashinfo"
 
-        if not source.exists():
+        if not source.exists() and not source.is_symlink():
             self.set_status(404)
             self.finish(json.dumps({'error': 'Item not found in trash'}))
             return
@@ -205,13 +215,16 @@ class TrashDeleteHandler(APIHandler):
         target = files_dir / trash_path
         info_file = info_dir / f"{trash_path}.trashinfo"
 
-        if not target.exists():
+        if not target.exists() and not target.is_symlink():
             self.set_status(404)
             self.finish(json.dumps({'error': 'Item not found in trash'}))
             return
 
         try:
-            if target.is_dir():
+            if target.is_symlink():
+                # Symlinks should be unlinked, never rmtree'd
+                target.unlink()
+            elif target.is_dir():
                 shutil.rmtree(str(target))
             else:
                 target.unlink()
@@ -241,7 +254,9 @@ class TrashEmptyHandler(APIHandler):
         if files_dir.exists():
             for entry in list(files_dir.iterdir()):
                 try:
-                    if entry.is_dir():
+                    if entry.is_symlink():
+                        entry.unlink()
+                    elif entry.is_dir():
                         shutil.rmtree(str(entry))
                     else:
                         entry.unlink()

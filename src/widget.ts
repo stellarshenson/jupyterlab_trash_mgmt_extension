@@ -94,10 +94,9 @@ export class TrashWidget extends Widget {
     this._emptyMessage.style.display = 'none';
     this.node.appendChild(this._emptyMessage);
 
-    // Create spinner for loading states
+    // Create spinner for loading states - visible by default for first open
     this._spinner = new Spinner();
     this._spinner.addClass('jp-TrashPanel-spinner');
-    this._spinner.hide();
     this.node.appendChild(this._spinner.node);
 
     // Note: Initial load is handled in onAfterShow() when panel becomes visible
@@ -399,7 +398,7 @@ export class TrashWidget extends Widget {
         method: 'POST',
         body: JSON.stringify({ trash_path: item.trash_path })
       });
-      await this.refresh();
+      await this._loadTrashContents();
     } catch (error: any) {
       const message = error?.message || 'Failed to restore item';
       showErrorMessage('Restore Failed', message);
@@ -422,7 +421,7 @@ export class TrashWidget extends Widget {
           method: 'POST',
           body: JSON.stringify({ trash_path: item.trash_path })
         });
-        await this.refresh();
+        await this._loadTrashContents();
       } catch (error: any) {
         const message = error?.message || 'Failed to delete item';
         showErrorMessage('Delete Failed', message);
@@ -448,7 +447,7 @@ export class TrashWidget extends Widget {
         await requestAPI<{ success: boolean; deleted_count: number }>('empty', {
           method: 'POST'
         });
-        await this.refresh();
+        await this._loadTrashContents();
       } catch (error: any) {
         const message = error?.message || 'Failed to empty trash';
         showErrorMessage('Empty Trash Failed', message);
