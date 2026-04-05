@@ -395,6 +395,11 @@ export class TrashWidget extends Widget {
     itemEl.appendChild(sizeCol);
 
     // Click handler for selection
+    itemEl.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.shiftKey) {
+        e.preventDefault();
+      }
+    });
     itemEl.addEventListener('click', (e: MouseEvent) => {
       e.stopPropagation();
       const index = this._sortedItems.indexOf(item);

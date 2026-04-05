@@ -125,6 +125,7 @@
   padding: 0 8px;
   height: 22px;
   cursor: default;
+  user-select: none;
 }
 
 .jp-TrashPanel-item:hover,
