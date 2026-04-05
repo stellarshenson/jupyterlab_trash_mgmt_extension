@@ -41,9 +41,11 @@ export class TrashWidget extends Widget {
   private _emptyMessage: HTMLDivElement;
   private _commands: CommandRegistry;
   private _contextMenu: Menu;
-  private _selectedItem: ITrashItem | null = null;
-  private _selectedElement: HTMLElement | null = null;
+  private _selectedItems: Set<ITrashItem> = new Set();
+  private _lastClickedIndex: number = -1;
+  private _itemElements: Map<ITrashItem, HTMLElement> = new Map();
   private _items: ITrashItem[] = [];
+  private _sortedItems: ITrashItem[] = [];
   private _sortColumn: SortColumn = 'modified';
   private _sortDirection: SortDirection = 'desc';
   private _refreshIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -63,13 +65,9 @@ export class TrashWidget extends Widget {
     this._contextMenu.addItem({ command: 'trash:restore' });
     this._contextMenu.addItem({ command: 'trash:delete' });
 
-    // Clear selection when menu closes
+    // Clear visual state when menu closes (keep selection)
     this._contextMenu.aboutToClose.connect(() => {
       this.node.classList.remove('jp-mod-contextMenuOpen');
-      if (this._selectedElement) {
-        this._selectedElement.classList.remove('jp-mod-selected');
-        this._selectedElement = null;
-      }
     });
 
     // Create header
@@ -99,24 +97,39 @@ export class TrashWidget extends Widget {
     this._spinner.addClass('jp-TrashPanel-spinner');
     this.node.appendChild(this._spinner.node);
 
+    // Clear selection when clicking empty area of the list
+    this._list.addEventListener('click', (e: MouseEvent) => {
+      if (e.target === this._list) {
+        this._clearSelection();
+      }
+    });
+
     // Note: Initial load is handled in onAfterShow() when panel becomes visible
   }
 
   private _setupCommands(): void {
     this._commands.addCommand('trash:restore', {
-      label: 'Restore',
+      label: () => {
+        const count = this._selectedItems.size;
+        return count > 1 ? `Restore ${count} Items` : 'Restore';
+      },
       execute: () => {
-        if (this._selectedItem) {
-          this._restoreItem(this._selectedItem);
+        if (this._selectedItems.size > 0) {
+          this._restoreItems([...this._selectedItems]);
         }
       }
     });
 
     this._commands.addCommand('trash:delete', {
-      label: 'Delete Permanently',
+      label: () => {
+        const count = this._selectedItems.size;
+        return count > 1
+          ? `Delete ${count} Items Permanently`
+          : 'Delete Permanently';
+      },
       execute: () => {
-        if (this._selectedItem) {
-          this._deleteItem(this._selectedItem);
+        if (this._selectedItems.size > 0) {
+          this._deleteItems([...this._selectedItems]);
         }
       }
     });
@@ -151,6 +164,8 @@ export class TrashWidget extends Widget {
   private async _loadTrashContents(): Promise<void> {
     const data = await requestAPI<ITrashListResponse>('list');
     this._items = data.items;
+    this._selectedItems.clear();
+    this._lastClickedIndex = -1;
     this._renderHeader(data);
     this._renderColumnHeader();
     this._renderItems();
@@ -259,6 +274,7 @@ export class TrashWidget extends Widget {
 
   private _renderItems(): void {
     this._list.innerHTML = '';
+    this._itemElements.clear();
 
     if (this._items.length === 0) {
       this._emptyMessage.style.display = 'flex';
@@ -271,10 +287,67 @@ export class TrashWidget extends Widget {
     this._columnHeader.style.display = 'flex';
     this._list.style.display = 'block';
 
-    const sortedItems = this._getSortedItems();
-    for (const item of sortedItems) {
+    this._sortedItems = this._getSortedItems();
+    for (const item of this._sortedItems) {
       const itemEl = this._createItemElement(item);
+      this._itemElements.set(item, itemEl);
       this._list.appendChild(itemEl);
+    }
+  }
+
+  private _clearSelection(): void {
+    for (const item of this._selectedItems) {
+      const el = this._itemElements.get(item);
+      if (el) {
+        el.classList.remove('jp-mod-selected');
+      }
+    }
+    this._selectedItems.clear();
+  }
+
+  private _selectItem(item: ITrashItem): void {
+    this._selectedItems.add(item);
+    const el = this._itemElements.get(item);
+    if (el) {
+      el.classList.add('jp-mod-selected');
+    }
+  }
+
+  private _deselectItem(item: ITrashItem): void {
+    this._selectedItems.delete(item);
+    const el = this._itemElements.get(item);
+    if (el) {
+      el.classList.remove('jp-mod-selected');
+    }
+  }
+
+  private _handleItemClick(item: ITrashItem, index: number, e: MouseEvent) {
+    if (e.shiftKey && this._lastClickedIndex >= 0) {
+      // Shift+click: range select from last clicked to current
+      const start = Math.min(this._lastClickedIndex, index);
+      const end = Math.max(this._lastClickedIndex, index);
+
+      if (!e.ctrlKey && !e.metaKey) {
+        this._clearSelection();
+      }
+
+      for (let i = start; i <= end; i++) {
+        this._selectItem(this._sortedItems[i]);
+      }
+      // Don't update _lastClickedIndex on shift+click to allow extending range
+    } else if (e.ctrlKey || e.metaKey) {
+      // Ctrl+click: toggle individual item
+      if (this._selectedItems.has(item)) {
+        this._deselectItem(item);
+      } else {
+        this._selectItem(item);
+      }
+      this._lastClickedIndex = index;
+    } else {
+      // Normal click: select only this item
+      this._clearSelection();
+      this._selectItem(item);
+      this._lastClickedIndex = index;
     }
   }
 
@@ -321,22 +394,26 @@ export class TrashWidget extends Widget {
     sizeCol.textContent = item.size_formatted;
     itemEl.appendChild(sizeCol);
 
+    // Click handler for selection
+    itemEl.addEventListener('click', (e: MouseEvent) => {
+      e.stopPropagation();
+      const index = this._sortedItems.indexOf(item);
+      this._handleItemClick(item, index, e);
+    });
+
     // Context menu
     itemEl.addEventListener('contextmenu', e => {
       e.preventDefault();
       e.stopPropagation();
 
-      // Clear previous selection
-      if (this._selectedElement) {
-        this._selectedElement.classList.remove('jp-mod-selected');
+      // If right-clicked item is not in selection, select only it
+      if (!this._selectedItems.has(item)) {
+        this._clearSelection();
+        this._selectItem(item);
+        this._lastClickedIndex = this._sortedItems.indexOf(item);
       }
 
-      // Set new selection
-      this._selectedItem = item;
-      this._selectedElement = itemEl;
-      itemEl.classList.add('jp-mod-selected');
       this.node.classList.add('jp-mod-contextMenuOpen');
-
       this._contextMenu.open(e.clientX, e.clientY);
     });
 
@@ -391,40 +468,63 @@ export class TrashWidget extends Widget {
     }
   }
 
-  private async _restoreItem(item: ITrashItem): Promise<void> {
+  private async _restoreItems(items: ITrashItem[]): Promise<void> {
     this._spinner.show();
+    const errors: string[] = [];
     try {
-      await requestAPI<{ success: boolean; restored_to: string }>('restore', {
-        method: 'POST',
-        body: JSON.stringify({ trash_path: item.trash_path })
-      });
+      for (const item of items) {
+        try {
+          await requestAPI<{ success: boolean; restored_to: string }>(
+            'restore',
+            {
+              method: 'POST',
+              body: JSON.stringify({ trash_path: item.trash_path })
+            }
+          );
+        } catch (error: any) {
+          errors.push(`${item.name}: ${error?.message || 'unknown error'}`);
+        }
+      }
       await this._loadTrashContents();
-    } catch (error: any) {
-      const message = error?.message || 'Failed to restore item';
-      showErrorMessage('Restore Failed', message);
+      if (errors.length > 0) {
+        showErrorMessage('Restore Failed', errors.join('\n'));
+      }
     } finally {
       this._spinner.hide();
     }
   }
 
-  private async _deleteItem(item: ITrashItem): Promise<void> {
+  private async _deleteItems(items: ITrashItem[]): Promise<void> {
+    const count = items.length;
+    const body =
+      count === 1
+        ? `Are you sure you want to permanently delete "${items[0].name}"? This cannot be undone.`
+        : `Are you sure you want to permanently delete ${count} items? This cannot be undone.`;
+
     const result = await showDialog({
       title: 'Delete Permanently',
-      body: `Are you sure you want to permanently delete "${item.name}"? This cannot be undone.`,
+      body,
       buttons: [Dialog.cancelButton(), Dialog.warnButton({ label: 'Delete' })]
     });
 
     if (result.button.accept) {
       this._spinner.show();
+      const errors: string[] = [];
       try {
-        await requestAPI<{ success: boolean }>('delete', {
-          method: 'POST',
-          body: JSON.stringify({ trash_path: item.trash_path })
-        });
+        for (const item of items) {
+          try {
+            await requestAPI<{ success: boolean }>('delete', {
+              method: 'POST',
+              body: JSON.stringify({ trash_path: item.trash_path })
+            });
+          } catch (error: any) {
+            errors.push(`${item.name}: ${error?.message || 'unknown error'}`);
+          }
+        }
         await this._loadTrashContents();
-      } catch (error: any) {
-        const message = error?.message || 'Failed to delete item';
-        showErrorMessage('Delete Failed', message);
+        if (errors.length > 0) {
+          showErrorMessage('Delete Failed', errors.join('\n'));
+        }
       } finally {
         this._spinner.hide();
       }
