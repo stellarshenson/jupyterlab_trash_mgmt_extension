@@ -49,6 +49,7 @@ export class TrashWidget extends Widget {
   private _sortColumn: SortColumn = 'modified';
   private _sortDirection: SortDirection = 'desc';
   private _refreshIntervalId: ReturnType<typeof setInterval> | null = null;
+  private _refreshBtn: HTMLButtonElement | null = null;
   private _spinner: Spinner;
 
   constructor() {
@@ -137,13 +138,24 @@ export class TrashWidget extends Widget {
 
   async refresh(): Promise<void> {
     this._spinner.show();
+    this._setRefreshSpinning(true);
+    const minSpin = new Promise<void>(resolve =>
+      window.setTimeout(resolve, 500)
+    );
     try {
-      await this._loadTrashContents();
+      await Promise.all([this._loadTrashContents(), minSpin]);
     } catch (error) {
       console.error('Failed to load trash:', error);
       showErrorMessage('Trash Error', 'Failed to load trash contents');
     } finally {
+      this._setRefreshSpinning(false);
       this._spinner.hide();
+    }
+  }
+
+  private _setRefreshSpinning(on: boolean): void {
+    if (this._refreshBtn) {
+      this._refreshBtn.classList.toggle('jp-mod-spinning', on);
     }
   }
 
@@ -185,12 +197,12 @@ export class TrashWidget extends Widget {
     actions.className = 'jp-TrashPanel-header-actions';
 
     // Refresh button
-    const refreshBtn = document.createElement('button');
-    refreshBtn.className = 'jp-TrashPanel-header-button';
-    refreshBtn.title = 'Refresh';
-    refreshIcon.element({ container: refreshBtn });
-    refreshBtn.addEventListener('click', () => this.refresh());
-    actions.appendChild(refreshBtn);
+    this._refreshBtn = document.createElement('button');
+    this._refreshBtn.className = 'jp-TrashPanel-header-button';
+    this._refreshBtn.title = 'Refresh';
+    refreshIcon.element({ container: this._refreshBtn });
+    this._refreshBtn.addEventListener('click', () => this.refresh());
+    actions.appendChild(this._refreshBtn);
 
     // Empty trash button
     if (data.item_count > 0) {
