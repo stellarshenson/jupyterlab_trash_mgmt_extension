@@ -369,8 +369,10 @@ Makefile, project template, dependency versions and CI
   - test-tags: MANUAL, CI
   - log: 2026-10-13T21:21:28Z @kj added
   - log: 2026-10-13T23:27:15Z @kj closed
-- [ ] `ACC-BUILD-54` **CI passes** - CRITICAL; workflows `Build` and `Check Release` pass on the commit that carries these changes
+- [x] `ACC-BUILD-54` **CI passes** - CRITICAL; workflows `Build` and `Check Release` pass on the commit that carries these changes
+  - evidence: 1ec5c25 green on GitHub Actions: Build 38527663568 (build, test_isolated, Integration tests, Check Links) and Check Release 38527663535 all success
   - test: `gh run list --branch main --limit 2` shows both runs `success`
   - test-tags: CI
   - log: 2026-10-13T21:21:28Z @kj added
+  - log: 2026-10-14T07:25:31Z @kj closed
 
