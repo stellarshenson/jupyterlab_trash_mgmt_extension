@@ -1,11 +1,12 @@
 [build-system]
-requires = ["hatchling>=1.5.0", "jupyterlab>=4.0.0,<5", "hatch-nodejs-version>=0.3.2"]
+requires = ["hatchling>=1.5.0", "hatch-nodejs-version>=0.3.2", "jupyter-builder>=1.2,<2"]
 build-backend = "hatchling.build"
 
 [project]
 name = "jupyterlab_trash_mgmt_extension"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 classifiers = [
     "Framework :: Jupyter",
@@ -13,7 +14,6 @@ classifiers = [
     "Framework :: Jupyter :: JupyterLab :: 4",
     "Framework :: Jupyter :: JupyterLab :: Extensions",
     "Framework :: Jupyter :: JupyterLab :: Extensions :: Prebuilt",
-    "License :: OSI Approved :: BSD License",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -23,20 +23,21 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "jupyter_server>=2.4.0,<3"
+    "jupyter_server>=2.21,<3"
 ]
 dynamic = ["version", "description", "authors", "urls", "keywords"]
 
 [project.optional-dependencies]
 dev = [
-    "jupyterlab>=4",
+    "jupyterlab>=4.6,<5",
+    "jupyter-builder>=1.2,<2",
 ]
 test = [
-    "coverage",
-    "pytest",
-    "pytest-asyncio",
-    "pytest-cov",
-    "pytest-jupyter[server]>=0.6.0"
+    "coverage>=7.16,<8",
+    "pytest>=9.1,<10",
+    "pytest-asyncio>=1.4,<2",
+    "pytest-cov>=7.1,<8",
+    "pytest-jupyter[server]>=0.11,<1"
 ]
 
 [tool.hatch.version]
@@ -81,7 +82,7 @@ version_cmd = "hatch version"
 
 [tool.jupyter-releaser.hooks]
 before-build-npm = [
-    "python -m pip install 'jupyterlab>=4.0.0,<5'",
+    "python -m pip install 'jupyter-builder>=1.2,<2'",
     "jlpm",
     "jlpm build:prod"
 ]
@@ -91,7 +92,6 @@ before-build-python = ["jlpm clean:all"]
 ignore = ["W002"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 check_links_ignore = [
     "https://pepy.tech/.*",
     "https://static.pepy.tech/.*",

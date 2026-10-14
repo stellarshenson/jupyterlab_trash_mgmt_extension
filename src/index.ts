@@ -30,7 +30,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
     );
 
     // Check if trash functionality is enabled on the server
-    const trashEnabled = await isTrashEnabled();
+    const serverSettings = app.serviceManager.serverSettings;
+    const trashEnabled = await isTrashEnabled(serverSettings);
     if (!trashEnabled) {
       console.log(
         'Trash functionality is disabled (delete_to_trash=False). Trash panel will not be shown.'
@@ -41,7 +42,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
     const { commands } = app;
 
     // Create the trash widget
-    const widget = new TrashWidget();
+    const widget = new TrashWidget(serverSettings);
 
     // Add to left sidebar
     labShell.add(widget, 'left', { rank: 600 });

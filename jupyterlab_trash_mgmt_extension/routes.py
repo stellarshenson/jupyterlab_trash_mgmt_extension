@@ -18,11 +18,13 @@ def get_trash_dir() -> Path:
 
 
 def get_dir_size(path: Path) -> int:
-    """Calculate total size of a directory recursively."""
+    """Calculate total size of a directory recursively. Symlinks count as the link itself."""
     total = 0
     try:
         for entry in path.rglob('*'):
-            if entry.is_file():
+            if entry.is_symlink():
+                total += entry.lstat().st_size
+            elif entry.is_file():
                 total += entry.stat().st_size
     except (PermissionError, OSError):
         pass
@@ -74,6 +76,44 @@ def parse_trashinfo(info_path: Path) -> dict:
     return result
 
 
+def resolve_trash_path(trash_path) -> Path:
+    """Map a path relative to Trash/files onto the filesystem.
+
+    Raises ValueError for a path that could leave Trash/files: an absolute
+    path, a `.`, `..` or empty segment, or a parent segment that is a symlink.
+    The last segment may itself be a symlink - the entry is the link.
+    """
+    if not isinstance(trash_path, str) or not trash_path or '\x00' in trash_path:
+        raise ValueError('Invalid trash path')
+    parts = trash_path.split('/')
+    if any(part in ('', '.', '..') for part in parts):
+        raise ValueError('Invalid trash path')
+    current = get_trash_dir() / 'files'
+    for part in parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError('Invalid trash path')
+    return current / parts[-1]
+
+
+def get_trash_metadata(trash_path: str) -> dict:
+    """Original path and deletion date of an entry at any depth.
+
+    Both come from the .trashinfo of the top-level item; a nested entry gets
+    the original path of that item extended by its own relative path.
+    """
+    top, _, inner = trash_path.partition('/')
+    info_file = get_trash_dir() / 'info' / f"{top}.trashinfo"
+    metadata = parse_trashinfo(info_file) if info_file.exists() else {}
+    original_path = metadata.get('original_path', '')
+    if original_path and inner:
+        original_path = str(Path(original_path) / inner)
+    return {
+        'original_path': original_path,
+        'deletion_date': metadata.get('deletion_date', '')
+    }
+
+
 class TrashStatusHandler(APIHandler):
     """Handler for checking if trash functionality is enabled."""
 
@@ -93,29 +133,63 @@ class TrashListHandler(APIHandler):
 
     @tornado.web.authenticated
     def get(self):
-        trash_dir = get_trash_dir()
-        files_dir = trash_dir / 'files'
-        info_dir = trash_dir / 'info'
+        # strip=False: a folder name may start or end with a space
+        folder = self.get_argument('path', '', strip=False)
+        listed = get_trash_dir() / 'files'
+
+        if folder:
+            try:
+                listed = resolve_trash_path(folder)
+            except ValueError as e:
+                self.set_status(400)
+                self.finish(json.dumps({'error': str(e)}))
+                return
+
+            # A symlink is never followed, it would list a folder outside the trash
+            if listed.is_symlink():
+                self.set_status(400)
+                self.finish(json.dumps({'error': 'Invalid trash path'}))
+                return
+
+            if not listed.exists():
+                self.set_status(404)
+                self.finish(json.dumps({'error': 'Folder not found in trash'}))
+                return
+
+            if not listed.is_dir():
+                self.set_status(400)
+                self.finish(json.dumps({'error': 'Not a folder'}))
+                return
+
+        # Inside a folder every entry shares the trashinfo of the top-level item
+        folder_metadata = get_trash_metadata(folder) if folder else None
 
         items = []
         total_size = 0
 
-        if files_dir.exists():
-            for entry in files_dir.iterdir():
+        if listed.exists():
+            for entry in listed.iterdir():
                 try:
-                    info_file = info_dir / f"{entry.name}.trashinfo"
-                    metadata = parse_trashinfo(info_file) if info_file.exists() else {}
+                    if folder_metadata is None:
+                        trash_path = entry.name
+                        metadata = get_trash_metadata(trash_path)
+                    else:
+                        trash_path = f"{folder}/{entry.name}"
+                        original_path = folder_metadata['original_path']
+                        metadata = {
+                            'original_path': str(Path(original_path) / entry.name) if original_path else '',
+                            'deletion_date': folder_metadata['deletion_date']
+                        }
 
                     size = get_item_size(entry)
                     total_size += size
 
-                    # For symlinks, check if target is dir without following broken links
-                    is_dir = entry.is_dir() if not entry.is_symlink() else entry.is_dir()
+                    is_dir = entry.is_dir()
                     is_symlink = entry.is_symlink()
 
                     items.append({
                         'name': entry.name,
-                        'trash_path': entry.name,
+                        'trash_path': trash_path,
                         'original_path': metadata.get('original_path', ''),
                         'deletion_date': metadata.get('deletion_date', ''),
                         'size': size,
@@ -150,21 +224,22 @@ class TrashRestoreHandler(APIHandler):
             self.finish(json.dumps({'error': 'No trash_path provided'}))
             return
 
-        trash_dir = get_trash_dir()
-        files_dir = trash_dir / 'files'
-        info_dir = trash_dir / 'info'
+        try:
+            source = resolve_trash_path(trash_path)
+        except ValueError as e:
+            self.set_status(400)
+            self.finish(json.dumps({'error': str(e)}))
+            return
 
-        source = files_dir / trash_path
-        info_file = info_dir / f"{trash_path}.trashinfo"
+        info_file = get_trash_dir() / 'info' / f"{trash_path}.trashinfo"
 
         if not source.exists() and not source.is_symlink():
             self.set_status(404)
             self.finish(json.dumps({'error': 'Item not found in trash'}))
             return
 
-        # Get original path from trashinfo
-        metadata = parse_trashinfo(info_file) if info_file.exists() else {}
-        original_path = metadata.get('original_path', '')
+        # Get original path from the trashinfo of the top-level item
+        original_path = get_trash_metadata(trash_path)['original_path']
 
         if not original_path:
             self.set_status(400)
@@ -174,7 +249,7 @@ class TrashRestoreHandler(APIHandler):
         dest = Path(original_path)
 
         # Check if destination already exists
-        if dest.exists():
+        if dest.exists() or dest.is_symlink():
             self.set_status(409)
             self.finish(json.dumps({'error': f'Destination already exists: {original_path}'}))
             return
@@ -184,7 +259,8 @@ class TrashRestoreHandler(APIHandler):
 
         try:
             shutil.move(str(source), str(dest))
-            if info_file.exists():
+            # Only a top-level item has a trashinfo file of its own
+            if '/' not in trash_path and info_file.exists():
                 info_file.unlink()
             self.finish(json.dumps({
                 'success': True,
@@ -208,12 +284,14 @@ class TrashDeleteHandler(APIHandler):
             self.finish(json.dumps({'error': 'No trash_path provided'}))
             return
 
-        trash_dir = get_trash_dir()
-        files_dir = trash_dir / 'files'
-        info_dir = trash_dir / 'info'
+        try:
+            target = resolve_trash_path(trash_path)
+        except ValueError as e:
+            self.set_status(400)
+            self.finish(json.dumps({'error': str(e)}))
+            return
 
-        target = files_dir / trash_path
-        info_file = info_dir / f"{trash_path}.trashinfo"
+        info_file = get_trash_dir() / 'info' / f"{trash_path}.trashinfo"
 
         if not target.exists() and not target.is_symlink():
             self.set_status(404)
@@ -229,7 +307,8 @@ class TrashDeleteHandler(APIHandler):
             else:
                 target.unlink()
 
-            if info_file.exists():
+            # Only a top-level item has a trashinfo file of its own
+            if '/' not in trash_path and info_file.exists():
                 info_file.unlink()
 
             self.finish(json.dumps({'success': True}))

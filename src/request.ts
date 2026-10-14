@@ -6,24 +6,29 @@ import { ServerConnection } from '@jupyterlab/services';
  * Call the server extension
  *
  * @param endPoint API REST end point for the extension
+ * @param serverSettings The server settings to use for the request
  * @param init Initial values for the request
  * @returns The response body interpreted as JSON
  */
 export async function requestAPI<T>(
-  endPoint = '',
+  endPoint: string,
+  serverSettings: ServerConnection.ISettings,
   init: RequestInit = {}
 ): Promise<T> {
   // Make request to Jupyter API
-  const settings = ServerConnection.makeSettings();
   const requestUrl = URLExt.join(
-    settings.baseUrl,
+    serverSettings.baseUrl,
     'jupyterlab-trash-mgmt-extension', // our server extension's API namespace
     endPoint
   );
 
   let response: Response;
   try {
-    response = await ServerConnection.makeRequest(requestUrl, init, settings);
+    response = await ServerConnection.makeRequest(
+      requestUrl,
+      init,
+      serverSettings
+    );
   } catch (error) {
     throw new ServerConnection.NetworkError(error as any);
   }
@@ -51,11 +56,17 @@ export async function requestAPI<T>(
 /**
  * Check if trash functionality is enabled on the server
  *
+ * @param serverSettings The server settings to use for the request
  * @returns Promise resolving to true if trash is enabled
  */
-export async function isTrashEnabled(): Promise<boolean> {
+export async function isTrashEnabled(
+  serverSettings: ServerConnection.ISettings
+): Promise<boolean> {
   try {
-    const response = await requestAPI<{ trash_enabled: boolean }>('status');
+    const response = await requestAPI<{ trash_enabled: boolean }>(
+      'status',
+      serverSettings
+    );
     return response.trash_enabled;
   } catch (error) {
     console.warn('Failed to check trash status:', error);

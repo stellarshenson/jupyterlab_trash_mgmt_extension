@@ -1,0 +1,1 @@
+- 2026-10-13T23:27:33Z @kj defects.md d45dcf19 sha256:41bc89a3d7bd98406ed7abfc9fb772246bcc04d18f47042693b94f25fd920bb1: evidence line of DEF-TEST-4 reads `40 requests cases`; pm-tools has no command that rewrites an evidence line; corrected to `40 request cases`

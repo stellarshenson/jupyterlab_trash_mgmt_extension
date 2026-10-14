@@ -1,0 +1,376 @@
+# Acceptance Criteria - jupyterlab_trash_mgmt_extension
+
+The trash side panel lists the items in the XDG trash and restores or permanently deletes them. A Lumino widget in `src/widget.ts` renders the panel over the REST handlers in `jupyterlab_trash_mgmt_extension/routes.py`.
+
+## Authors
+
+- `@kj` Konrad Jelen
+
+## Panel header `HEAD`
+
+Title row, action icons and summary bar of the trash panel
+
+- [x] `ACC-HEAD-1` **Title** - HIGH; header row shows the text `TRASH MANAGEMENT`, left aligned
+  - evidence: jest `header > shows the title; the stylesheet upper-cases it` passes; in the browser the title renders `TRASH MANAGEMENT`; jest 49 passed on 2026-10-14
+  - test: render the widget, read the text of `.jp-TrashPanel-title`
+  - test-tags: UNIT, MANUAL
+  - log: 2026-10-13T21:21:24Z @kj added
+  - log: 2026-10-13T23:27:12Z @kj closed
+- [x] `ACC-HEAD-2` **Refresh is rightmost** - HIGH; refresh button is the last icon at the right end of the header row
+  - evidence: jest `header > has refresh as its last icon` passes; in the browser the header children are title, Empty Trash, Refresh; jest 49 passed on 2026-10-14
+  - test: render the widget, assert the last child of `.jp-TrashPanel-header` is the button titled `Refresh`
+  - test-tags: UNIT, MANUAL
+  - log: 2026-10-13T21:21:24Z @kj added
+  - log: 2026-10-13T23:27:12Z @kj closed
+- [x] `ACC-HEAD-3` **Empty Trash placement** - MEDIUM; `Empty Trash` button sits directly left of the refresh button
+  - evidence: jest `header > puts Empty Trash directly left of refresh` passes; jest 49 passed on 2026-10-14
+  - test: load a list with 1 item, assert the `Empty Trash` button is the sibling before `Refresh`
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:24Z @kj added
+  - log: 2026-10-13T23:27:12Z @kj closed
+- [x] `ACC-HEAD-4` **Empty Trash hidden on empty trash** - MEDIUM; `Empty Trash` button is hidden while the trash holds 0 items
+  - evidence: jest `header > hides Empty Trash while the trash holds no item` passes; in the browser the button has `display: none` after Empty Trash; jest 49 passed on 2026-10-14
+  - test: load a top-level list with 0 items, assert the button is hidden
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:24Z @kj added
+  - log: 2026-10-13T23:27:12Z @kj closed
+- [x] `ACC-HEAD-5` **Summary bar** - HIGH; shaded bar under the header shows `<count> ITEMS · <size>` for the listed location
+  - evidence: jest `summary bar > shows count and size of the listed location` passes; the browser shows `8 ITEMS · 2.7 GB` in the shaded bar; jest 49 passed on 2026-10-14
+  - test: load a list with 12 items and `4.5 MB`, read `.jp-TrashPanel-summary`
+  - test-tags: UNIT, MANUAL
+  - mechanism: 2026-10-13T21:21:25Z @kj text built from `item_count` and `total_size_formatted` of the `list` response, upper-cased by CSS
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:12Z @kj closed
+- [x] `ACC-HEAD-6` **Summary bar has no collapse** - LOW; summary bar has no caret and does nothing on click
+  - evidence: jest `summary bar > has no caret and does nothing on click` passes; jest 49 passed on 2026-10-14
+  - test: click the summary bar, assert no caret element exists and the list stays visible
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:12Z @kj closed
+- [x] `ACC-HEAD-7` **Edge: one item** - LOW; with 1 item the summary bar reads `1 ITEM · <size>`
+  - evidence: jest `summary bar > uses the singular for one item` passes; jest 49 passed on 2026-10-14
+  - test: load a list with 1 item, read the summary bar
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:12Z @kj closed
+- [x] `ACC-HEAD-8` **Edge: empty trash** - LOW; with 0 items the summary bar reads `0 ITEMS · 0 B`
+  - evidence: jest `summary bar > reads zero for an empty trash` passes; jest 49 passed on 2026-10-14
+  - test: load a list with 0 items, read the summary bar
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:12Z @kj closed
+- [x] `ACC-HEAD-9` **Refresh icon turns for the whole refresh** - MEDIUM; after a refresh click the refresh icon rotates until the load ends, 500 ms at least
+  - evidence: jest `refresh icon > turns until the load ends, 500 ms at least` and `keeps turning while a slow load is pending` pass; jest 49 passed on 2026-10-14
+  - related: DEF-PANEL-2 - the early stop this criterion rules out
+  - test: click refresh with a list response that resolves at once, assert `jp-mod-spinning` is on the button at 400 ms and off at 600 ms
+  - test-tags: UNIT
+  - mechanism: 2026-10-13T21:21:25Z @kj header built once in the constructor, so the button that carries `jp-mod-spinning` is never replaced during a load
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+
+## Loading veil `VEIL`
+
+Translucent overlay with a ring spinner shown while the panel loads
+
+- [-] `ACC-VEIL-10` **Veil on refresh click** - HIGH; a refresh click covers the panel with a translucent veil and a centred ring spinner until the load ends
+  - overridden-by: ACC-VEIL-55
+  - test: click refresh, assert `.jp-TrashPanel-loading` is not hidden during the load and hidden after it
+  - test-tags: UNIT, MANUAL
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T21:31:45Z @kj rejected: overridden by ACC-VEIL-55: on 2026-10-13 the user chose the present behaviour of jupyterlab_ai_code_assistants_extension, veil on the first load only
+- [x] `ACC-VEIL-11` **Veil on first open** - MEDIUM; the first open shows the veil until the first load ends
+  - evidence: jest `loading veil > covers the panel on the first open until the first load ends` passes; seen in the browser in both themes; jest 49 passed on 2026-10-14
+  - test: construct the widget, assert the veil is not hidden before the first load
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-VEIL-12` **Veil on restore, delete and empty** - MEDIUM; the veil covers the panel while a restore, delete or empty request runs
+  - evidence: jest `loading veil > covers the panel while a restore runs` passes; delete and empty call the same `_setLoading` pair; jest 49 passed on 2026-10-14
+  - test: run a restore with a pending request, assert the veil is not hidden until it resolves
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-VEIL-13` **No veil on auto-refresh** - MEDIUM; the 10 s auto-refresh updates the list with no veil and no icon spin
+  - evidence: jest `loading veil > stays down during the background refresh` passes; jest 49 passed on 2026-10-14
+  - test: run the background refresh, assert the veil stays hidden and the button has no `jp-mod-spinning`
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-VEIL-14` **Edge: load fails** - MEDIUM; when a refresh fails the veil and the icon spin end and the dialog `Failed to load trash contents` opens
+  - evidence: jest `loading veil > comes down and reports the error when the first load fails` passes; jest 49 passed on 2026-10-14
+  - test: reject the list request, assert the veil is hidden and `showErrorMessage` was called
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-VEIL-55` **Refresh click keeps the list usable** - HIGH; a refresh click rotates the refresh icon and raises no veil; rows stay clickable during the load
+  - evidence: jest `loading veil > stays down on a refresh click after the first load` passes; in the browser the veil stayed hidden during a refresh click; jest 49 passed on 2026-10-14
+  - overrides: ACC-VEIL-10 - user decision of 2026-10-13
+  - test: load once, click refresh with a pending request, assert the veil is hidden and the button has `jp-mod-spinning`
+  - test-tags: UNIT, MANUAL
+  - mechanism: 2026-10-13T21:31:45Z @kj veil raised only while no list has been loaded yet, as `refresh()` of `jupyterlab_ai_code_assistants_extension` does
+  - log: 2026-10-13T21:31:45Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+
+## Folder navigation `NAV`
+
+Entering a trashed folder and acting on the rows inside it
+
+- [x] `ACC-NAV-15` **Enter a folder** - HIGH; double-click on a folder row lists the direct children of that folder
+  - evidence: jest `folder navigation > lists the children of a folder on double-click` and pytest `TestList::test_folder_children` pass; jest 49 passed on 2026-10-14; pytest 63 passed on 2026-10-14
+  - test: trash a folder with 2 files, double-click its row, assert 2 rows
+  - test-tags: UNIT, INTEGRATION, MANUAL
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-NAV-16` **Any depth** - HIGH; a folder inside a trashed folder is entered the same way, to any depth
+  - evidence: pytest `TestList::test_any_depth` and jest `folder navigation > enters a folder inside a folder` pass; the browser opened `Trash/data/raw/2024/q4`; pytest 63 passed on 2026-10-14
+  - test: `list` with path `a/b/c` returns the children of `c`
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-NAV-17` **Breadcrumb row** - HIGH; inside a folder a breadcrumb row shows `Trash / <folder> / <subfolder>`
+  - evidence: jest `breadcrumb > shows the path inside a folder` passes; jest 49 passed on 2026-10-14
+  - test: enter `a` then `b`, read the breadcrumb row
+  - test-tags: UNIT, MANUAL
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-NAV-18` **Breadcrumb hidden at top level** - LOW; the breadcrumb row is hidden at the top level
+  - evidence: jest `breadcrumb > is hidden at the top level` passes; jest 49 passed on 2026-10-14
+  - test: load the top level, assert the breadcrumb row is hidden
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:25Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-NAV-19` **Breadcrumb segment click** - HIGH; click on a breadcrumb segment lists that level; `Trash` lists the top level
+  - evidence: jest `breadcrumb > lists the level of a clicked segment` passes; jest 49 passed on 2026-10-14
+  - test: inside `a/b` click `a`, assert `list` is requested with path `a`; click `Trash`, assert no path
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-NAV-20` **File double-click** - LOW; double-click on a file row changes nothing
+  - evidence: jest `folder navigation > does nothing on a double-click of a file` passes; jest 49 passed on 2026-10-14
+  - test: double-click a file row, assert no `list` request is sent
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-NAV-21` **Deletion time of a nested row** - LOW; a nested row shows the deletion time of its trashed top-level folder
+  - evidence: pytest `TestList::test_nested_row_carries_deletion_date_of_top_level` passes; pytest 63 passed on 2026-10-14
+  - test: `list` with path `a` returns each child with the `deletion_date` of `a`
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-NAV-22` **Original path of a nested row** - LOW; the tooltip of a nested row shows `<original path of the trashed folder>/<relative path>`
+  - evidence: pytest `TestList::test_nested_row_carries_original_path` passes; the row tooltip prints `original_path` on its `Original:` line; pytest 63 passed on 2026-10-14
+  - test: `list` with path `a` returns each child with `original_path` under the original path of `a`
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-NAV-23` **Summary inside a folder** - MEDIUM; inside a folder the summary bar shows the count and total size of the direct children of that folder
+  - evidence: pytest `TestList::test_summary_of_folder` and jest `summary bar > describes the folder in view` pass; pytest 63 passed on 2026-10-14; jest 49 passed on 2026-10-14
+  - test: `list` with path `a` returns `item_count` 2 and the summed size for a folder with 2 files
+  - test-tags: UNIT, INTEGRATION
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-NAV-24` **Restore nested item** - HIGH; `Restore` on a nested row moves it to `<original path of the trashed folder>/<relative path>`
+  - evidence: pytest `TestRestore::test_nested_item` passes; pytest 63 passed on 2026-10-14
+  - test: POST `restore` with `a/file1.txt`, assert the file is at the original path of `a` plus `file1.txt`
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:13Z @kj closed
+- [x] `ACC-NAV-25` **Nested restore creates parents** - MEDIUM; nested restore creates the missing parent folders of the target
+  - evidence: pytest `TestRestore::test_nested_restore_creates_parents` passes; pytest 63 passed on 2026-10-14
+  - test: POST `restore` with `a/b/c.txt` while the original folder of `a` is absent, assert `b` was created
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-26` **Nested restore keeps the folder** - MEDIUM; after a nested restore the trashed folder and its `.trashinfo` stay in the trash
+  - evidence: pytest `TestRestore::test_nested_restore_keeps_the_folder` passes; pytest 63 passed on 2026-10-14
+  - test: POST `restore` with `a/file1.txt`, assert `a`, `a/file2.txt` and `a.trashinfo` still exist
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-27` **Delete nested item** - HIGH; `Delete Permanently` on a nested row removes only that file or subfolder
+  - evidence: pytest `TestDelete::test_nested_item_only` and `test_nested_folder` pass; pytest 63 passed on 2026-10-14
+  - test: POST `delete` with `a/file1.txt`, assert `a/file2.txt` and `a.trashinfo` still exist
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-28` **Multi-select inside a folder** - MEDIUM; Shift+click and Ctrl+click select rows inside a folder; `Restore N Items` and `Delete N Items Permanently` act on all selected rows
+  - evidence: jest `selection > restores every selected row inside a folder` passes; in the browser 2 nested rows were deleted in one action; jest 49 passed on 2026-10-14
+  - test: inside a folder select 2 rows, run restore, assert 2 `restore` requests with nested paths
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-29` **Selection cleared on navigation** - LOW; entering or leaving a folder clears the selection
+  - evidence: jest `selection > is cleared when a folder is entered` and `is cleared when a folder is left` pass; jest 49 passed on 2026-10-14
+  - test: select a row, enter a folder, assert the selection is empty
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-30` **Location kept on reload** - MEDIUM; auto-refresh and the reload after restore or delete list the folder in view, not the top level
+  - evidence: jest `folder navigation > keeps the location on the background refresh` and `keeps the location on the reload after a delete` pass; jest 49 passed on 2026-10-14
+  - test: inside `a` run the background refresh, assert `list` is requested with path `a`
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-31` **Sort kept on navigation** - LOW; sort column and direction stay when the location changes
+  - evidence: jest `folder navigation > keeps sort column and direction` passes; jest 49 passed on 2026-10-14
+  - test: sort by size ascending, enter a folder, assert the size column still carries the ascending arrow
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-32` **Edge: empty folder** - LOW; an empty folder lists no rows and shows `Folder is empty`
+  - evidence: jest `folder navigation > shows Folder is empty inside an empty folder` and pytest `TestList::test_empty_folder` pass; jest 49 passed on 2026-10-14; pytest 63 passed on 2026-10-14
+  - test: enter a folder with 0 children, read the empty message
+  - test-tags: UNIT
+  - log: 2026-10-13T21:21:26Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-33` **Edge: folder in view removed** - MEDIUM; when the folder in view no longer exists the panel lists its nearest existing parent
+  - evidence: jest `folder navigation > lists the nearest parent when the folder in view is gone` and pytest `TestList::test_missing_folder_is_404` pass; jest 49 passed on 2026-10-14; pytest 63 passed on 2026-10-14
+  - test: inside `a/b` answer 404 for `a/b` and 200 for `a`, assert the panel shows `a`
+  - test-tags: UNIT, INTEGRATION
+  - mechanism: 2026-10-13T21:21:27Z @kj `list` answers 404 for a missing folder; the widget drops the last path segment and loads again
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-34` **Edge: path outside trash** - CRITICAL; `list`, `restore` and `delete` answer 400 for a path that is absolute or has a `..` segment; nothing outside `Trash/files` is read, moved or removed
+  - evidence: pytest `test_path_outside_trash_is_400` (list 6 paths, restore 3 paths), `TestDelete::test_parent_segment_is_400` and `test_absolute_path_is_400` pass; each asserts the outside target still exists; pytest 63 passed on 2026-10-14
+  - test: POST `delete` with `../victim` and with an absolute path, assert 400 and the target still exists
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-35` **Edge: symlink never followed** - HIGH; a symlink row is not enterable; `list`, `restore` and `delete` answer 400 for a path that passes through a symlink
+  - evidence: pytest `test_symlink_is_not_listed_as_a_folder` and `test_path_through_a_symlink_is_400` (list, restore, delete) and jest `does not enter a symlink to a folder` pass; pytest 63 passed on 2026-10-14; jest 49 passed on 2026-10-14
+  - related: DEF-API-1 - the delete request this criterion stops
+  - test: trash a symlink `link` to an outside folder, `list` with path `link` answers 400
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-36` **Edge: nested restore target exists** - MEDIUM; nested restore answers 409 `Destination already exists` and moves nothing when the target path exists
+  - evidence: pytest `TestRestore::test_nested_restore_target_exists_is_409` passes; pytest 63 passed on 2026-10-14
+  - test: create the target file first, POST `restore`, assert 409 and the nested file still in the trash
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-37` **Edge: nested restore without trashinfo** - MEDIUM; nested restore answers 400 `Cannot determine original path` when the trashed top-level folder has no `.trashinfo`
+  - evidence: pytest `TestRestore::test_nested_restore_without_trashinfo_is_400` passes; pytest 63 passed on 2026-10-14
+  - test: remove `a.trashinfo`, POST `restore` with `a/file1.txt`, assert 400
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-38` **Edge: list path is a file** - LOW; `list` answers 400 for a path that names a file
+  - evidence: pytest `TestList::test_file_path_is_400` passes; pytest 63 passed on 2026-10-14
+  - test: `list` with path `a/file1.txt`, assert 400
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-39` **Edge: whole-folder restore after nested restore** - MEDIUM; restore of the top-level folder answers 409 `Destination already exists: <path>` when a nested restore recreated its original path
+  - evidence: pytest `TestRestore::test_whole_folder_after_nested_restore_is_409` passes; pytest 63 passed on 2026-10-14
+  - test: restore `a/file1.txt`, then restore `a`, assert 409 and `a` still in the trash
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T23:27:14Z @kj closed
+- [x] `ACC-NAV-40` **Edge: nested row removed before the action** - LOW; restore or delete of a nested row that no longer exists answers 404 `Item not found in trash`
+  - evidence: pytest `test_missing_nested_item_is_404` passes for delete and for restore; pytest 63 passed on 2026-10-14
+  - test: POST `delete` with `a/missing.txt`, assert 404
+  - test-tags: INTEGRATION
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T23:27:15Z @kj closed
+- [x] `ACC-NAV-56` **Load feedback on navigation** - LOW; entering a folder or clicking a breadcrumb segment rotates the refresh icon until that level is listed
+  - evidence: jest `folder navigation > turns the refresh icon while a folder loads` passes; jest 49 passed on 2026-10-14
+  - test: enter a folder with a pending request, assert the button has `jp-mod-spinning` until it resolves
+  - test-tags: UNIT
+  - log: 2026-10-13T21:31:45Z @kj added
+  - log: 2026-10-13T23:27:15Z @kj closed
+- [x] `ACC-NAV-57` **Symlink row is not drawn as a folder** - LOW; a symlink row shows the file icon and the tooltip type `Symbolic link`, also when it points at a folder
+  - evidence: jest `folder navigation > draws a symlink to a folder as a file` passes; jest 49 passed on 2026-10-14
+  - test: render a row with `is_dir` and `is_symlink` both true, assert the file icon and the tooltip line `Type: Symbolic link`
+  - test-tags: UNIT, MANUAL
+  - log: 2026-10-13T21:53:35Z @kj added
+  - log: 2026-10-13T23:27:15Z @kj closed
+
+## Build and tooling `BUILD`
+
+Makefile, project template, dependency versions and CI
+
+- [x] `ACC-BUILD-41` **Canonical Makefile** - HIGH; project `Makefile` is byte-identical to `../@utils/jupyterlab-extensions/Makefile` version 1.45
+  - evidence: `diff Makefile ../@utils/jupyterlab-extensions/Makefile` printed nothing on 2026-10-13; line 1 reads version 1.45
+  - test: `diff Makefile ../@utils/jupyterlab-extensions/Makefile` prints nothing
+  - test-tags: MANUAL
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T21:28:48Z @kj closed: verified: Makefile copied from @utils
+- [x] `ACC-BUILD-42` **Project-local node environment ignored** - MEDIUM; `.nodeenv/` is ignored by git, prettier and eslint
+  - evidence: with `.nodeenv/` present `git status --short` lists no `.nodeenv` path and `jlpm lint:check` exits 0
+  - test: with `.nodeenv/` present, `git status --short` and `jlpm lint:check` do not report it
+  - test-tags: MANUAL
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T21:28:48Z @kj closed: verified: `.nodeenv/` added to `.gitignore`
+- [x] `ACC-BUILD-43` **No npm lockfile** - LOW; `package-lock.json` is absent; `yarn.lock` is the only lockfile
+  - evidence: `ls package-lock.json` reports no such file after `make build` on 2026-10-13
+  - test: `ls package-lock.json` reports no such file after `make build`
+  - test-tags: MANUAL
+  - mechanism: 2026-10-13T21:21:27Z @kj Makefile 1.41 and later install with `jlpm` only and never write `package-lock.json`
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T21:28:48Z @kj closed: verified: `package-lock.json` removed
+- [x] `ACC-BUILD-44` **Template version** - HIGH; `_commit` in `.copier-answers.yml` is `v4.6.5`, the newest release tag of `jupyterlab/extension-template` on 2026-10-13
+  - evidence: `grep _commit .copier-answers.yml` prints `_commit: v4.6.5`
+  - test: `grep _commit .copier-answers.yml` prints `v4.6.5`
+  - test-tags: MANUAL
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T21:28:48Z @kj closed: verified: `copier update` applied
+- [x] `ACC-BUILD-45` **Template update keeps release settings** - HIGH; after the template update `check-release.yml` still carries `steps_to_skip: "build-changelog"` and `RH_SINCE_LAST_STABLE`
+  - evidence: the grep in the test line prints 2 after the template update
+  - test: `grep -c -e build-changelog -e RH_SINCE_LAST_STABLE .github/workflows/check-release.yml` prints 2
+  - test-tags: MANUAL
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T21:28:48Z @kj closed: verified: `check-release.yml` settings kept
+- [x] `ACC-BUILD-46` **Template update keeps package metadata** - MEDIUM; `homepage`, `bugs.url` and `repository.url` in `package.json` still point at `github.com/stellarshenson/jupyterlab_trash_mgmt_extension`
+  - evidence: `homepage`, `bugs.url` and `repository.url` read back as the three stellarshenson/jupyterlab_trash_mgmt_extension URLs
+  - test: read the three fields with `node -p`
+  - test-tags: MANUAL
+  - log: 2026-10-13T21:21:27Z @kj added
+  - log: 2026-10-13T21:28:48Z @kj closed: verified: package metadata kept
+- [x] `ACC-BUILD-47` **npm packages upgraded** - MEDIUM; every entry in `yarn.lock` is at the newest version its `package.json` range allows
+  - evidence: a second `jlpm up -R` left `yarn.lock` at sha256 54564077c59eab8a; `@jupyterlab/application` moved 4.5.1 to 4.6.4
+  - test: run `make upgrade` a second time, `git diff --stat` shows no further change
+  - test-tags: MANUAL
+  - log: 2026-10-13T21:21:28Z @kj added
+  - log: 2026-10-13T21:28:48Z @kj closed: verified: lock entries re-resolved with `jlpm up -R`; `make upgrade` alone changed no version
+- [x] `ACC-BUILD-48` **No JupyterLab downgrade** - HIGH; no `@jupyterlab/*` range in `package.json` is lower than before the upgrade
+  - evidence: `git diff package.json`: application ^4.0.0 to ^4.6.0, apputils ^4.0.0 to ^4.7.0, coreutils ^6.0.0 to ^6.6.0, services ^7.0.0 to ^7.6.0, ui-components ^4.0.0 to ^4.6.0, testutils ^4.0.0 to ^4.6.0
+  - test: `git diff package.json`, compare each `@jupyterlab/*` line
+  - test-tags: MANUAL
+  - log: 2026-10-13T21:21:28Z @kj added
+  - log: 2026-10-13T21:28:49Z @kj closed: verified: every `@jupyterlab/*` range raised
+- [x] `ACC-BUILD-49` **Python dependency ranges** - MEDIUM; each Python range in `pyproject.toml` has its floor at the installed `major.minor` and its ceiling below the next major
+  - evidence: jupyter_server 2.21.1, jupyterlab 4.6.4, jupyter-builder 1.2.3, coverage 7.16.2, pytest 9.1.1, pytest-asyncio 1.4.0, pytest-cov 7.1.0, pytest-jupyter 0.11.0 each sit inside their range; hatchling and hatch-nodejs-version are not installed and keep their range
+  - test: compare each range with `importlib.metadata.version` of the package
+  - test-tags: MANUAL
+  - log: 2026-10-13T21:21:28Z @kj added
+  - log: 2026-10-13T21:28:49Z @kj closed: verified: floors set from the installed versions
+- [x] `ACC-BUILD-50` **Build passes** - CRITICAL; `make build` exits 0 and writes one wheel and one sdist into `dist/`
+  - evidence: `make build` exit 0 and `make install` exit 0 on 2026-10-14; `dist/` holds `jupyterlab_trash_mgmt_extension-1.1.11-py3-none-any.whl` and `jupyterlab_trash_mgmt_extension-1.1.11.tar.gz`
+  - test: `make build && ls dist`
+  - test-tags: MANUAL, CI
+  - log: 2026-10-13T21:21:28Z @kj added
+  - log: 2026-10-13T23:27:15Z @kj closed
+- [x] `ACC-BUILD-51` **Tests pass** - CRITICAL; `make test` exits 0 with jest and pytest both run
+  - evidence: `make test` exit 0 on 2026-10-14: jest 49 passed, pytest 63 passed, `check_auth.py` reports that all endpoints require authentication; log `logs/make-test.log`
+  - test: `make test`, read the jest and pytest summaries
+  - test-tags: MANUAL, CI
+  - log: 2026-10-13T21:21:28Z @kj added
+  - log: 2026-10-13T23:27:15Z @kj closed
+- [x] `ACC-BUILD-52` **Lint passes** - HIGH; `jlpm lint:check` exits 0
+  - evidence: `jlpm lint:check` exit 0 on 2026-10-14: stylelint clean, prettier clean, eslint 0 errors and 22 warnings
+  - test: `jlpm lint:check`
+  - test-tags: MANUAL, CI
+  - log: 2026-10-13T21:21:28Z @kj added
+  - log: 2026-10-13T23:27:15Z @kj closed
+- [x] `ACC-BUILD-53` **Extension loads** - CRITICAL; after `make install`, `jupyter labextension list` and `jupyter server extension list` report `jupyterlab_trash_mgmt_extension` as OK
+  - evidence: after `make install` on 2026-10-14 `jupyter labextension list` shows `v1.1.11 enabled OK` and `jupyter server extension list` shows `1.1.11 OK`; `python -m jupyterlab.browser_check` exit 0; the Galata activation test passed
+  - test: run both list commands, grep for `jupyterlab_trash_mgmt_extension.*OK`
+  - test-tags: MANUAL, CI
+  - log: 2026-10-13T21:21:28Z @kj added
+  - log: 2026-10-13T23:27:15Z @kj closed
+- [ ] `ACC-BUILD-54` **CI passes** - CRITICAL; workflows `Build` and `Check Release` pass on the commit that carries these changes
+  - test: `gh run list --branch main --limit 2` shows both runs `success`
+  - test-tags: CI
+  - log: 2026-10-13T21:21:28Z @kj added
+

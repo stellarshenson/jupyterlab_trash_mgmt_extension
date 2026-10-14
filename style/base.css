@@ -13,11 +13,11 @@
   position: relative;
 }
 
-/* Header section - compact */
+/* Header section: title on the left, action icons on the right */
 .jp-TrashPanel-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 2px;
   padding: 4px 8px;
   border-bottom: 1px solid var(--jp-border-color2);
   background: var(--jp-layout-color2);
@@ -25,23 +25,29 @@
   min-height: 24px;
 }
 
-.jp-TrashPanel-header-info {
+/* The title and the summary bar mirror the file browser's headers:
+   600 weight, uppercase, ui-font-size0, 1px tracking. */
+.jp-TrashPanel-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
   font-size: var(--jp-ui-font-size0);
-  color: var(--jp-ui-font-color2);
+  color: var(--jp-ui-font-color1);
 }
 
-.jp-TrashPanel-header-actions {
-  display: flex;
-  gap: 2px;
-  align-items: center;
-}
-
+/* 24px hit box, 14px glyph */
 .jp-TrashPanel-header-button {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
   border-radius: 2px;
@@ -65,6 +71,80 @@
   height: 14px;
 }
 
+/* `display: flex` above would beat the user-agent `[hidden] { display: none }`,
+   so the hidden state has to be restated. */
+.jp-TrashPanel-header-button[hidden] {
+  display: none;
+}
+
+/* Summary bar: item count and total size of the listed location */
+.jp-TrashPanel-summary {
+  flex-shrink: 0;
+  min-height: 16px;
+  padding: 4px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--jp-border-color2);
+  background: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  font-size: var(--jp-ui-font-size0);
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* Breadcrumb row: shown only inside a folder. It wraps, so every segment of
+   a deep path stays on screen and can be clicked. */
+.jp-TrashPanel-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0 2px;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--jp-border-color2);
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size0);
+}
+
+.jp-TrashPanel-breadcrumb[hidden] {
+  display: none;
+}
+
+.jp-TrashPanel-crumb {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 20px;
+}
+
+.jp-TrashPanel-crumb:not(.jp-mod-current) {
+  cursor: pointer;
+}
+
+.jp-TrashPanel-crumb:not(.jp-mod-current):hover {
+  background: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+}
+
+.jp-TrashPanel-crumb.jp-mod-current {
+  color: var(--jp-ui-font-color1);
+}
+
+.jp-TrashPanel-crumbSeparator {
+  color: var(--jp-ui-font-color3);
+}
+
 /* Column headers */
 .jp-TrashPanel-columnHeader {
   display: flex;
@@ -85,7 +165,7 @@
 }
 
 .jp-TrashPanel-columnHeader .jp-TrashPanel-col-modified {
-  width: 90px;
+  width: 60px;
   flex-shrink: 0;
   text-align: right;
   padding-right: 8px;
@@ -128,9 +208,12 @@
   user-select: none;
 }
 
-.jp-TrashPanel-item:hover,
-.jp-TrashPanel-item.jp-mod-selected {
+.jp-TrashPanel-item:hover {
   background: var(--jp-layout-color2);
+}
+
+.jp-TrashPanel-item.jp-mod-selected {
+  background: var(--jp-layout-color3);
 }
 
 /* Disable hover on other items when context menu is open */
@@ -151,7 +234,7 @@
 }
 
 .jp-TrashPanel-item .jp-TrashPanel-col-modified {
-  width: 90px;
+  width: 60px;
   flex-shrink: 0;
   font-size: var(--jp-ui-font-size0);
   color: var(--jp-ui-font-color2);
@@ -169,6 +252,12 @@
   color: var(--jp-ui-font-color2);
   text-align: right;
   white-space: nowrap;
+}
+
+/* font-color2 on the selected background measures 3.06:1 in the dark theme */
+.jp-TrashPanel-item.jp-mod-selected .jp-TrashPanel-col-modified,
+.jp-TrashPanel-item.jp-mod-selected .jp-TrashPanel-col-size {
+  color: var(--jp-ui-font-color1);
 }
 
 /* Item icon */
@@ -209,19 +298,7 @@
   padding: 12px;
 }
 
-/* Spinner overlay */
-.jp-TrashPanel-spinner {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--jp-layout-color1);
-  opacity: 0.8;
-  z-index: 10;
-}
-
-/* Refresh button spin animation */
+/* Refresh button and loading ring rotation */
 @keyframes jp-trash-panel-spin {
   from {
     transform: rotate(0deg);
@@ -234,4 +311,37 @@
 
 .jp-TrashPanel-header-button.jp-mod-spinning svg {
   animation: jp-trash-panel-spin 0.9s linear infinite;
+}
+
+/* Full-panel veil, raised while there is no list to show yet and while a
+   restore, delete or empty request runs. The rule is gated on :not([hidden])
+   because this `display` would otherwise beat the user-agent
+   `[hidden] { display: none }` rule and keep the veil on. */
+.jp-TrashPanel-loading:not([hidden]) {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--jp-layout-color1) 65%, transparent);
+}
+
+.jp-TrashPanel-loadingSpinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--jp-border-color2);
+  border-top-color: var(--jp-brand-color1);
+  border-radius: 50%;
+  animation: jp-trash-panel-spin 0.7s linear infinite;
+}
+
+/* The rotation carries "busy", not information, so under a reduced-motion
+   preference it becomes the same glyph held still and dimmed. */
+@media (prefers-reduced-motion: reduce) {
+  .jp-TrashPanel-header-button.jp-mod-spinning svg,
+  .jp-TrashPanel-loadingSpinner {
+    opacity: 0.5;
+    animation: none;
+  }
 }

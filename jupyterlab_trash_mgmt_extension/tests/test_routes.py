@@ -68,6 +68,21 @@ class TestHelperFunctions:
         size = get_item_size(test_dir)
         assert size == 10  # 5 + 5 bytes
 
+    def test_get_item_size_directory_counts_symlinks_as_links(self, tmp_path):
+        """Test get_item_size does not follow a symlink inside a directory."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "big.bin").write_bytes(b"x" * 100000)
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+        (test_dir / "file.txt").write_text("Hello")
+        file_link = test_dir / "file_link"
+        dir_link = test_dir / "dir_link"
+        file_link.symlink_to(outside / "big.bin")
+        dir_link.symlink_to(outside)
+        expected = 5 + file_link.lstat().st_size + dir_link.lstat().st_size
+        assert get_item_size(test_dir) == expected
+
     def test_get_item_size_nonexistent(self, tmp_path):
         """Test get_item_size for non-existent path."""
         nonexistent = tmp_path / "nonexistent.txt"

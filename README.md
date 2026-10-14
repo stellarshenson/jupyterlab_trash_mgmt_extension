@@ -20,12 +20,13 @@ A dedicated left panel for managing your JupyterLab trash. See what's taking up 
 - **Trash panel in sidebar** - Accessible alongside file browser, kernels, git, and extensions panels
 - **Storage usage display** - See how much space deleted files occupy
 - **Individual item management** - Remove or restore specific files from trash
+- **Folder navigation** - Open a trashed folder and restore or remove single items inside it
 - **Empty bin** - Clear all deleted files at once
 - **Server-side integration** - Python backend for reliable trash operations
 
 ## Installation
 
-Requires JupyterLab 4.0.0 or higher.
+Requires JupyterLab 4.6 or higher.
 
 ```bash
 pip install jupyterlab_trash_mgmt_extension

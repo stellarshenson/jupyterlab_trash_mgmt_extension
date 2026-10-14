@@ -4,3 +4,9 @@ node_modules
 **/package.json
 !/package.json
 jupyterlab_trash_mgmt_extension
+eslint.config.mjs
+.venv
+.claude
+tmp
+docs/acc-crit*.md
+docs/defects*.md

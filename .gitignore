@@ -126,3 +126,12 @@ dmypy.json
 
 # Yarn cache
 .yarn/
+
+.nodeenv/
+
+tmp/
+
+logs/
+
+# Jest JUnit report
+junit.xml

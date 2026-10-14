@@ -1,13 +1,9 @@
 import { Widget } from '@lumino/widgets';
-import {
-  showDialog,
-  Dialog,
-  showErrorMessage,
-  Spinner
-} from '@jupyterlab/apputils';
+import { showDialog, Dialog, showErrorMessage } from '@jupyterlab/apputils';
 import { Menu } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
 import { Message } from '@lumino/messaging';
+import { ServerConnection } from '@jupyterlab/services';
 import { requestAPI } from './request';
 import { trashIcon, folderIcon, fileIcon, refreshIcon } from './icon';
 
@@ -22,6 +18,7 @@ interface ITrashItem {
   size: number;
   size_formatted: string;
   is_dir: boolean;
+  is_symlink: boolean;
 }
 
 interface ITrashListResponse {
@@ -36,9 +33,14 @@ type SortDirection = 'asc' | 'desc';
 
 export class TrashWidget extends Widget {
   private _header: HTMLDivElement;
+  private _summary: HTMLDivElement;
+  private _breadcrumb: HTMLDivElement;
   private _columnHeader: HTMLDivElement;
   private _list: HTMLDivElement;
   private _emptyMessage: HTMLDivElement;
+  private _loadingVeil: HTMLDivElement;
+  private _emptyBtn: HTMLButtonElement;
+  private _refreshBtn: HTMLButtonElement;
   private _commands: CommandRegistry;
   private _contextMenu: Menu;
   private _selectedItems: Set<ITrashItem> = new Set();
@@ -49,11 +51,20 @@ export class TrashWidget extends Widget {
   private _sortColumn: SortColumn = 'modified';
   private _sortDirection: SortDirection = 'desc';
   private _refreshIntervalId: ReturnType<typeof setInterval> | null = null;
-  private _refreshBtn: HTMLButtonElement | null = null;
-  private _spinner: Spinner;
+  private _serverSettings: ServerConnection.ISettings;
+  // Segments of the folder in view; empty at the top level of the trash
+  private _path: string[] = [];
+  // False until the first list has arrived
+  private _loaded = false;
+  // List requests in flight, and the sequence number of the newest one
+  private _pendingLoads = 0;
+  private _loadSeq = 0;
+  // Refreshes that currently keep the refresh icon turning
+  private _spinCount = 0;
 
-  constructor() {
+  constructor(serverSettings: ServerConnection.ISettings) {
     super();
+    this._serverSettings = serverSettings;
     this.id = 'jp-trash-panel';
     this.title.icon = trashIcon;
     this.title.caption = 'Trash';
@@ -71,10 +82,45 @@ export class TrashWidget extends Widget {
       this.node.classList.remove('jp-mod-contextMenuOpen');
     });
 
-    // Create header
+    // Create header: title on the left, action icons on the right. It is
+    // built once, so the refresh button keeps its spinning state across loads.
     this._header = document.createElement('div');
     this._header.className = 'jp-TrashPanel-header';
+
+    const title = document.createElement('span');
+    title.className = 'jp-TrashPanel-title';
+    title.textContent = 'Trash Management';
+    this._header.appendChild(title);
+
+    this._emptyBtn = document.createElement('button');
+    this._emptyBtn.className =
+      'jp-TrashPanel-header-button jp-TrashPanel-header-button-danger';
+    this._emptyBtn.title = 'Empty Trash';
+    this._emptyBtn.hidden = true;
+    trashIcon.element({ container: this._emptyBtn });
+    this._emptyBtn.addEventListener('click', () => this._emptyTrash());
+    this._header.appendChild(this._emptyBtn);
+
+    // Refresh is appended last, so it is the rightmost icon
+    this._refreshBtn = document.createElement('button');
+    this._refreshBtn.className = 'jp-TrashPanel-header-button';
+    this._refreshBtn.title = 'Refresh';
+    refreshIcon.element({ container: this._refreshBtn });
+    this._refreshBtn.addEventListener('click', () => this.refresh());
+    this._header.appendChild(this._refreshBtn);
+
     this.node.appendChild(this._header);
+
+    // Create summary bar: item count and total size of the listed location
+    this._summary = document.createElement('div');
+    this._summary.className = 'jp-TrashPanel-summary';
+    this.node.appendChild(this._summary);
+
+    // Create breadcrumb row: shown only inside a folder
+    this._breadcrumb = document.createElement('div');
+    this._breadcrumb.className = 'jp-TrashPanel-breadcrumb';
+    this._breadcrumb.hidden = true;
+    this.node.appendChild(this._breadcrumb);
 
     // Create column headers
     this._columnHeader = document.createElement('div');
@@ -93,10 +139,13 @@ export class TrashWidget extends Widget {
     this._emptyMessage.style.display = 'none';
     this.node.appendChild(this._emptyMessage);
 
-    // Create spinner for loading states - visible by default for first open
-    this._spinner = new Spinner();
-    this._spinner.addClass('jp-TrashPanel-spinner');
-    this.node.appendChild(this._spinner.node);
+    // Create loading veil - visible by default, until the first load ends
+    this._loadingVeil = document.createElement('div');
+    this._loadingVeil.className = 'jp-TrashPanel-loading';
+    const loadingSpinner = document.createElement('div');
+    loadingSpinner.className = 'jp-TrashPanel-loadingSpinner';
+    this._loadingVeil.appendChild(loadingSpinner);
+    this.node.appendChild(this._loadingVeil);
 
     // Clear selection when clicking empty area of the list
     this._list.addEventListener('click', (e: MouseEvent) => {
@@ -136,33 +185,51 @@ export class TrashWidget extends Widget {
     });
   }
 
-  async refresh(): Promise<void> {
-    this._spinner.show();
+  /**
+   * Reload the panel on a user action. Lists the folder in view unless
+   * another location is given.
+   */
+  async refresh(path: string[] = this._path): Promise<void> {
+    // The veil covers the whole panel, header included, so it is raised only
+    // while there is no list to show yet; a later refresh turns the icon alone.
+    const cold = !this._loaded;
+    if (cold) {
+      this._setLoading(true);
+    }
     this._setRefreshSpinning(true);
     const minSpin = new Promise<void>(resolve =>
       window.setTimeout(resolve, 500)
     );
     try {
-      await Promise.all([this._loadTrashContents(), minSpin]);
+      await Promise.all([this._loadTrashContents(path), minSpin]);
     } catch (error) {
       console.error('Failed to load trash:', error);
       showErrorMessage('Trash Error', 'Failed to load trash contents');
     } finally {
       this._setRefreshSpinning(false);
-      this._spinner.hide();
+      if (cold) {
+        this._setLoading(false);
+      }
     }
   }
 
   private _setRefreshSpinning(on: boolean): void {
-    if (this._refreshBtn) {
-      this._refreshBtn.classList.toggle('jp-mod-spinning', on);
-    }
+    this._spinCount += on ? 1 : -1;
+    this._refreshBtn.classList.toggle('jp-mod-spinning', this._spinCount > 0);
+  }
+
+  private _setLoading(on: boolean): void {
+    this._loadingVeil.hidden = !on;
   }
 
   /**
-   * Background refresh without spinner - used for auto-refresh.
+   * Background refresh without veil or icon spin - used for auto-refresh.
    */
   private async _refreshInBackground(): Promise<void> {
+    // A load in flight already carries the newest location; do not race it
+    if (this._pendingLoads > 0) {
+      return;
+    }
     try {
       await this._loadTrashContents();
     } catch (error) {
@@ -171,51 +238,118 @@ export class TrashWidget extends Widget {
   }
 
   /**
-   * Load trash contents from API and render.
+   * Request the listing of a location. A folder that no longer exists
+   * answers 404; its nearest existing parent is listed in its place, and
+   * `path` is shortened to that parent.
    */
-  private async _loadTrashContents(): Promise<void> {
-    const data = await requestAPI<ITrashListResponse>('list');
-    this._items = data.items;
-    this._selectedItems.clear();
-    this._lastClickedIndex = -1;
-    this._renderHeader(data);
-    this._renderColumnHeader();
-    this._renderItems();
+  private async _fetchList(path: string[]): Promise<ITrashListResponse> {
+    const endPoint =
+      path.length > 0
+        ? `list?path=${encodeURIComponent(path.join('/'))}`
+        : 'list';
+    try {
+      return await requestAPI<ITrashListResponse>(
+        endPoint,
+        this._serverSettings
+      );
+    } catch (error: any) {
+      if (path.length === 0 || error?.response?.status !== 404) {
+        throw error;
+      }
+      path.pop();
+      return this._fetchList(path);
+    }
   }
 
-  private _renderHeader(data: ITrashListResponse): void {
-    this._header.innerHTML = '';
-
-    // Size info - compact single line
-    const sizeInfo = document.createElement('span');
-    sizeInfo.className = 'jp-TrashPanel-header-info';
-    sizeInfo.textContent = `${data.item_count} items (${data.total_size_formatted})`;
-    this._header.appendChild(sizeInfo);
-
-    // Action buttons
-    const actions = document.createElement('div');
-    actions.className = 'jp-TrashPanel-header-actions';
-
-    // Refresh button
-    this._refreshBtn = document.createElement('button');
-    this._refreshBtn.className = 'jp-TrashPanel-header-button';
-    this._refreshBtn.title = 'Refresh';
-    refreshIcon.element({ container: this._refreshBtn });
-    this._refreshBtn.addEventListener('click', () => this.refresh());
-    actions.appendChild(this._refreshBtn);
-
-    // Empty trash button
-    if (data.item_count > 0) {
-      const emptyBtn = document.createElement('button');
-      emptyBtn.className =
-        'jp-TrashPanel-header-button jp-TrashPanel-header-button-danger';
-      emptyBtn.title = 'Empty Trash';
-      trashIcon.element({ container: emptyBtn });
-      emptyBtn.addEventListener('click', () => this._emptyTrash());
-      actions.appendChild(emptyBtn);
+  /**
+   * Load a location from the API and render it. Defaults to the folder in
+   * view.
+   */
+  private async _loadTrashContents(path: string[] = this._path): Promise<void> {
+    const seq = ++this._loadSeq;
+    const target = [...path];
+    let data: ITrashListResponse;
+    this._pendingLoads++;
+    try {
+      data = await this._fetchList(target);
+    } finally {
+      this._pendingLoads--;
+    }
+    // A newer load has started since; its result is the one to show
+    if (seq !== this._loadSeq) {
+      return;
     }
 
-    this._header.appendChild(actions);
+    // The selection and the shift-click anchor are kept by trash path while
+    // the location stays the same; a move to another folder clears both.
+    const sameLocation = target.join('/') === this._path.join('/');
+    const selected = new Set(
+      sameLocation ? [...this._selectedItems].map(item => item.trash_path) : []
+    );
+    const anchor = sameLocation
+      ? this._sortedItems[this._lastClickedIndex]?.trash_path
+      : undefined;
+
+    this._path = target;
+    this._loaded = true;
+    this._items = data.items;
+    this._selectedItems = new Set(
+      this._items.filter(item => selected.has(item.trash_path))
+    );
+    this._renderSummary(data);
+    this._renderBreadcrumb();
+    this._renderColumnHeader();
+    this._renderItems();
+    this._lastClickedIndex = this._sortedItems.findIndex(
+      item => item.trash_path === anchor
+    );
+  }
+
+  private _renderSummary(data: ITrashListResponse): void {
+    const count = data.item_count;
+    const noun = count === 1 ? 'item' : 'items';
+    this._summary.textContent = `${count} ${noun} \u00B7 ${data.total_size_formatted}`;
+    // Inside a folder the trash holds at least that folder
+    this._emptyBtn.hidden = this._path.length === 0 && count === 0;
+  }
+
+  private _renderBreadcrumb(): void {
+    this._breadcrumb.innerHTML = '';
+    this._breadcrumb.hidden = this._path.length === 0;
+
+    const labels = ['Trash', ...this._path];
+    labels.forEach((label, depth) => {
+      if (depth > 0) {
+        const separator = document.createElement('span');
+        separator.className = 'jp-TrashPanel-crumbSeparator';
+        separator.textContent = '/';
+        separator.setAttribute('aria-hidden', 'true');
+        this._breadcrumb.appendChild(separator);
+      }
+
+      // The last segment is the folder in view; the ones before it navigate
+      const isCurrent = depth === this._path.length;
+      const crumb = document.createElement(isCurrent ? 'span' : 'button');
+      crumb.className = 'jp-TrashPanel-crumb';
+      crumb.textContent = label;
+      crumb.title = label;
+      if (isCurrent) {
+        crumb.classList.add('jp-mod-current');
+      } else {
+        crumb.addEventListener('click', () =>
+          this._navigate(this._path.slice(0, depth))
+        );
+      }
+      this._breadcrumb.appendChild(crumb);
+    });
+  }
+
+  /**
+   * Show another location: a folder inside the trash, or the top level for
+   * an empty path.
+   */
+  private _navigate(path: string[]): void {
+    void this.refresh(path);
   }
 
   private _renderColumnHeader(): void {
@@ -246,7 +380,7 @@ export class TrashWidget extends Widget {
       createHeader('Name', 'name', 'jp-TrashPanel-col-name')
     );
     this._columnHeader.appendChild(
-      createHeader('Modified', 'modified', 'jp-TrashPanel-col-modified')
+      createHeader('Deleted', 'modified', 'jp-TrashPanel-col-modified')
     );
     this._columnHeader.appendChild(
       createHeader('Size', 'size', 'jp-TrashPanel-col-size')
@@ -289,9 +423,12 @@ export class TrashWidget extends Widget {
     this._itemElements.clear();
 
     if (this._items.length === 0) {
+      this._emptyMessage.textContent =
+        this._path.length > 0 ? 'Folder is empty' : 'Trash is empty';
       this._emptyMessage.style.display = 'flex';
       this._columnHeader.style.display = 'none';
       this._list.style.display = 'none';
+      this._sortedItems = [];
       return;
     }
 
@@ -366,9 +503,12 @@ export class TrashWidget extends Widget {
   private _createItemElement(item: ITrashItem): HTMLDivElement {
     const itemEl = document.createElement('div');
     itemEl.className = 'jp-TrashPanel-item';
+    if (this._selectedItems.has(item)) {
+      itemEl.classList.add('jp-mod-selected');
+    }
     itemEl.title = [
       `Original: ${item.original_path}`,
-      `Type: ${item.is_dir ? 'Folder' : 'File'}`,
+      `Type: ${item.is_symlink ? 'Symbolic link' : item.is_dir ? 'Folder' : 'File'}`,
       `Size: ${item.size_formatted}`,
       `Deleted: ${this._formatDate(item.deletion_date)}`
     ].join('\n');
@@ -379,7 +519,8 @@ export class TrashWidget extends Widget {
 
     const iconEl = document.createElement('span');
     iconEl.className = 'jp-TrashPanel-item-icon';
-    if (item.is_dir) {
+    // The folder icon marks a row that opens; a symlink is never followed
+    if (item.is_dir && !item.is_symlink) {
       folderIcon.element({ container: iconEl });
     } else {
       fileIcon.element({ container: iconEl });
@@ -417,6 +558,13 @@ export class TrashWidget extends Widget {
       const index = this._sortedItems.indexOf(item);
       this._handleItemClick(item, index, e);
     });
+
+    // Double-click opens a folder. A symlink is never followed.
+    if (item.is_dir && !item.is_symlink) {
+      itemEl.addEventListener('dblclick', () =>
+        this._navigate(item.trash_path.split('/'))
+      );
+    }
 
     // Context menu
     itemEl.addEventListener('contextmenu', e => {
@@ -456,17 +604,17 @@ export class TrashWidget extends Widget {
       if (diffSecs < 60) {
         return 'just now';
       } else if (diffMins < 60) {
-        return diffMins === 1 ? '1 minute ago' : `${diffMins} minutes ago`;
+        return `${diffMins}m ago`;
       } else if (diffHours < 24) {
-        return diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`;
+        return `${diffHours}h ago`;
       } else if (diffDays < 7) {
-        return diffDays === 1 ? 'yesterday' : `${diffDays} days ago`;
-      } else if (diffWeeks < 4) {
-        return diffWeeks === 1 ? '1 week ago' : `${diffWeeks} weeks ago`;
-      } else if (diffMonths < 12) {
-        return diffMonths === 1 ? '1 month ago' : `${diffMonths} months ago`;
+        return diffDays === 1 ? 'yesterday' : `${diffDays}d ago`;
+      } else if (diffDays < 30) {
+        return `${diffWeeks}w ago`;
+      } else if (diffDays < 365) {
+        return `${diffMonths}mo ago`;
       } else {
-        return diffYears === 1 ? '1 year ago' : `${diffYears} years ago`;
+        return `${diffYears}y ago`;
       }
     } catch {
       return '';
@@ -486,13 +634,14 @@ export class TrashWidget extends Widget {
   }
 
   private async _restoreItems(items: ITrashItem[]): Promise<void> {
-    this._spinner.show();
+    this._setLoading(true);
     const errors: string[] = [];
     try {
       for (const item of items) {
         try {
           await requestAPI<{ success: boolean; restored_to: string }>(
             'restore',
+            this._serverSettings,
             {
               method: 'POST',
               body: JSON.stringify({ trash_path: item.trash_path })
@@ -502,12 +651,12 @@ export class TrashWidget extends Widget {
           errors.push(`${item.name}: ${error?.message || 'unknown error'}`);
         }
       }
-      await this._loadTrashContents();
       if (errors.length > 0) {
         showErrorMessage('Restore Failed', errors.join('\n'));
       }
+      await this._loadTrashContents();
     } finally {
-      this._spinner.hide();
+      this._setLoading(false);
     }
   }
 
@@ -525,25 +674,29 @@ export class TrashWidget extends Widget {
     });
 
     if (result.button.accept) {
-      this._spinner.show();
+      this._setLoading(true);
       const errors: string[] = [];
       try {
         for (const item of items) {
           try {
-            await requestAPI<{ success: boolean }>('delete', {
-              method: 'POST',
-              body: JSON.stringify({ trash_path: item.trash_path })
-            });
+            await requestAPI<{ success: boolean }>(
+              'delete',
+              this._serverSettings,
+              {
+                method: 'POST',
+                body: JSON.stringify({ trash_path: item.trash_path })
+              }
+            );
           } catch (error: any) {
             errors.push(`${item.name}: ${error?.message || 'unknown error'}`);
           }
         }
-        await this._loadTrashContents();
         if (errors.length > 0) {
           showErrorMessage('Delete Failed', errors.join('\n'));
         }
+        await this._loadTrashContents();
       } finally {
-        this._spinner.hide();
+        this._setLoading(false);
       }
     }
   }
@@ -559,17 +712,25 @@ export class TrashWidget extends Widget {
     });
 
     if (result.button.accept) {
-      this._spinner.show();
+      this._setLoading(true);
       try {
-        await requestAPI<{ success: boolean; deleted_count: number }>('empty', {
-          method: 'POST'
-        });
+        const result = await requestAPI<{
+          success: boolean;
+          deleted_count: number;
+          errors?: string[];
+        }>('empty', this._serverSettings, { method: 'POST' });
         await this._loadTrashContents();
+        if (!result.success) {
+          showErrorMessage(
+            'Empty Trash Failed',
+            (result.errors ?? []).join('\n')
+          );
+        }
       } catch (error: any) {
         const message = error?.message || 'Failed to empty trash';
         showErrorMessage('Empty Trash Failed', message);
       } finally {
-        this._spinner.hide();
+        this._setLoading(false);
       }
     }
   }
@@ -616,7 +777,6 @@ export class TrashWidget extends Widget {
    */
   dispose(): void {
     this._stopAutoRefresh();
-    this._spinner.dispose();
     super.dispose();
   }
 }
