@@ -135,3 +135,4 @@ logs/
 
 # Jest JUnit report
 junit.xml
+.playwright-mcp/
