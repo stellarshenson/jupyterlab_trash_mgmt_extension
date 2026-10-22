@@ -2,6 +2,16 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.13] - 2026-10-22
+
+### Added
+
+- Acceptance criterion `ACC-MOTION-58-SPIN` in a new `MOTION` category: the refresh icon and the loading ring keep rotating while the system prefers reduced motion
+
+### Changed
+
+- Tracker and journal only; no extension code changed in this release. The criterion is open, because `style/base.css` still stops both animations under `prefers-reduced-motion: reduce`
+
 ## [1.1.12] - 2026-10-14
 
 ### Added

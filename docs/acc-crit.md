@@ -376,3 +376,13 @@ Makefile, project template, dependency versions and CI
   - log: 2026-10-13T21:21:28Z @kj added
   - log: 2026-10-14T07:25:31Z @kj closed
 
+## Spinner animation `MOTION`
+
+Rotation of the refresh icon and of the loading spinner
+
+- [ ] `ACC-MOTION-58-SPIN` **Spinners ignore reduced motion** - MEDIUM; both spinner animations keep rotating while the system prefers reduced motion
+  - test: in Galata with emulateMedia reducedMotion reduce, the computed animation-name of .jp-TrashPanel-loadingSpinner and of the spinning header svg is jp-trash-panel-spin
+  - test-tags: E2E, MANUAL
+  - mechanism: 2026-10-22T17:55:53Z @kj removing the prefers-reduced-motion block at style/base.css:341 for the two spinner selectors leaves the keyframe animation in force
+  - log: 2026-10-22T17:55:53Z @kj added
+
