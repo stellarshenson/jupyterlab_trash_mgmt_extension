@@ -1,10 +1,20 @@
 """Tests that send requests to the trash REST handlers of a running server."""
 
+import asyncio
 import json
 import os
+import threading
+import time
+from pathlib import Path
 
 import pytest
-from tornado.httpclient import HTTPClientError
+import tornado.httpserver
+import tornado.netutil
+import tornado.web
+from jupyter_server.auth.identity import IdentityProvider
+from tornado.httpclient import AsyncHTTPClient, HTTPClientError, HTTPRequest
+
+from jupyterlab_trash_mgmt_extension import routes
 
 NAMESPACE = "jupyterlab-trash-mgmt-extension"
 
@@ -76,9 +86,10 @@ class TestList:
     async def test_nested_row_carries_deletion_date_of_top_level(
         self, jp_fetch, trashed_folder
     ):
+        top = await get_list(jp_fetch)
         data = await get_list(jp_fetch, "a/b")
         assert [item["deletion_date"] for item in data["items"]] == [
-            "2024-01-14T09:00:00"
+            top["items"][0]["deletion_date"]
         ]
 
     async def test_nested_row_carries_original_path(self, jp_fetch, trashed_folder):
@@ -106,6 +117,27 @@ class TestList:
     async def test_file_path_is_400(self, jp_fetch, trashed_folder):
         code, error = await status_of(get_list(jp_fetch, "a/file1.txt"))
         assert (code, error) == (400, "Not a folder")
+
+    async def test_folder_removed_before_listing_is_404(
+        self, jp_fetch, trash_dir, monkeypatch
+    ):
+        folder = trash_dir / "files" / "gone"
+        folder.mkdir()
+        real_iterdir = Path.iterdir
+
+        def vanishing_iterdir(path):
+            if path == folder:
+                folder.rmdir()
+            return real_iterdir(path)
+
+        monkeypatch.setattr(Path, "iterdir", vanishing_iterdir)
+
+        with pytest.raises(HTTPClientError) as failure:
+            await get_list(jp_fetch, "gone")
+        assert failure.value.code == 404
+        assert json.loads(failure.value.response.body) == {
+            "error": "Folder not found in trash"
+        }
 
     @pytest.mark.parametrize("path", ["..", "../info", "a/../..", "/etc", "a//b", "./a"])
     async def test_path_outside_trash_is_400(self, jp_fetch, trashed_folder, path):
@@ -282,3 +314,169 @@ class TestEmpty:
         assert json.loads(response.body) == {"success": True, "deleted_count": 2}
         assert list((trashed_folder["folder"].parent).iterdir()) == []
         assert list(trashed_folder["info"].parent.iterdir()) == []
+
+    async def test_two_concurrent_empties_both_succeed(self, trash_dir, monkeypatch):
+        folder = trash_dir / "files" / "d"
+        folder.mkdir()
+        (folder / "f.txt").write_text("x")
+
+        # Hold both requests inside the deletion of the same entry
+        barrier = threading.Barrier(2, timeout=5)
+        real_rmtree = routes.shutil.rmtree
+
+        def synced_rmtree(path, *args, **kwargs):
+            barrier.wait()
+            return real_rmtree(path, *args, **kwargs)
+
+        monkeypatch.setattr(routes.shutil, "rmtree", synced_rmtree)
+
+        sockets = tornado.netutil.bind_sockets(0, "127.0.0.1")
+        port = sockets[0].getsockname()[1]
+        server = tornado.httpserver.HTTPServer(trash_app())
+        server.add_sockets(sockets)
+        base = f"http://127.0.0.1:{port}"
+        client = AsyncHTTPClient()
+        try:
+            responses = await asyncio.gather(
+                client.fetch(
+                    HTTPRequest(
+                        base + "/empty", method="POST", body="{}", request_timeout=10
+                    )
+                ),
+                client.fetch(
+                    HTTPRequest(
+                        base + "/empty", method="POST", body="{}", request_timeout=10
+                    )
+                ),
+            )
+        finally:
+            server.stop()
+
+        assert [json.loads(response.body)["success"] for response in responses] == [
+            True,
+            True,
+        ]
+        assert not folder.exists()
+
+
+# Overriding get_current_user keeps this standalone app independent of the
+# identity provider the pytest-jupyter server configures.
+class AuthedListHandler(routes.TrashListHandler):
+    def get_current_user(self):
+        return "test-user"
+
+
+class AuthedEmptyHandler(routes.TrashEmptyHandler):
+    def get_current_user(self):
+        return "test-user"
+
+
+def trash_app():
+    return tornado.web.Application(
+        [(r"/list", AuthedListHandler), (r"/empty", AuthedEmptyHandler)],
+        base_url="/",
+        identity_provider=IdentityProvider(),
+        disable_check_xsrf=True,
+    )
+
+
+def time_list_while_empty_runs(url, started):
+    """Send the list request once empty is inside rmtree, and time the answer.
+
+    Runs in a worker thread: the test loop is the one a synchronous handler
+    would block, so a request issued from it could not be sent mid-block.
+    """
+    assert started.wait(5.0), "the empty request never reached shutil.rmtree"
+
+    async def fetch():
+        return await AsyncHTTPClient().fetch(url, request_timeout=10)
+
+    began = time.monotonic()
+    asyncio.run(fetch())
+    return time.monotonic() - began
+
+
+class TestPerformance:
+    async def test_list_answers_while_empty_is_deleting(self, trash_dir, monkeypatch):
+        folder = trash_dir / "files" / "big"
+        folder.mkdir()
+        (folder / "file.txt").write_text("x")
+
+        started = threading.Event()
+
+        def slow_rmtree(*args, **kwargs):
+            started.set()
+            time.sleep(1.0)
+
+        monkeypatch.setattr(routes.shutil, "rmtree", slow_rmtree)
+
+        sockets = tornado.netutil.bind_sockets(0, "127.0.0.1")
+        port = sockets[0].getsockname()[1]
+        server = tornado.httpserver.HTTPServer(trash_app())
+        server.add_sockets(sockets)
+        base = f"http://127.0.0.1:{port}"
+
+        client = AsyncHTTPClient()
+        empty = client.fetch(
+            HTTPRequest(
+                base + "/empty", method="POST", body="{}", request_timeout=10
+            )
+        )
+        try:
+            elapsed = await asyncio.to_thread(
+                time_list_while_empty_runs, base + "/list", started
+            )
+            assert elapsed < 0.5, (
+                f"list answered after {elapsed:.2f}s while empty slept 1.0s"
+            )
+            await empty
+        finally:
+            await asyncio.gather(empty, return_exceptions=True)
+            server.stop()
+
+
+class TestSizeCache:
+    async def test_list_reuses_a_directory_walk_until_the_folder_changes(
+        self, jp_fetch, trashed_folder, monkeypatch
+    ):
+        routes.clear_dir_sizes()
+        walks = []
+        uncached_walk = routes.get_dir_size
+
+        def counting_walk(path):
+            walks.append(path)
+            return uncached_walk(path)
+
+        monkeypatch.setattr(routes, "get_dir_size", counting_walk)
+
+        await get_list(jp_fetch)
+        await get_list(jp_fetch)
+        assert len(walks) == 1
+
+        (trashed_folder["folder"] / "new.txt").write_text("new")
+        await get_list(jp_fetch)
+        assert len(walks) == 2
+
+    async def test_nested_restore_at_depth_two_shows_fresh_size(
+        self, jp_fetch, trashed_folder
+    ):
+        routes.clear_dir_sizes()
+        (trashed_folder["folder"] / "sub").mkdir()
+        (trashed_folder["folder"] / "sub" / "file.txt").write_text("1234567890")
+        assert (await get_list(jp_fetch))["items"][0]["size"] == 28
+
+        await post(jp_fetch, "restore", "a/sub/file.txt")
+
+        assert (await get_list(jp_fetch))["items"][0]["size"] == 18
+
+    async def test_nested_delete_at_depth_two_shows_fresh_size(
+        self, jp_fetch, trashed_folder
+    ):
+        routes.clear_dir_sizes()
+        (trashed_folder["folder"] / "sub").mkdir()
+        (trashed_folder["folder"] / "sub" / "file.txt").write_text("1234567890")
+        assert (await get_list(jp_fetch))["items"][0]["size"] == 28
+
+        await post(jp_fetch, "delete", "a/sub/file.txt")
+
+        assert (await get_list(jp_fetch))["items"][0]["size"] == 18

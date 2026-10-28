@@ -77,14 +77,15 @@
   display: none;
 }
 
-/* Summary bar: item count and total size of the listed location */
+/* Summary bar: item count and total size of the listed location. The bar
+   wraps, so both readouts stay visible beside the reduced-motion controls. */
 .jp-TrashPanel-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   flex-shrink: 0;
   min-height: 16px;
   padding: 4px 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   border-bottom: 1px solid var(--jp-border-color2);
   background: var(--jp-layout-color2);
   color: var(--jp-ui-font-color1);
@@ -93,6 +94,38 @@
   line-height: 16px;
   letter-spacing: 1px;
   text-transform: uppercase;
+}
+
+.jp-TrashPanel-summaryText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Reduced-motion chip and its override toggle, inside the summary bar. The
+   bar upper-cases its text; the controls read as labels and buttons. */
+.jp-TrashPanel-motionChip,
+.jp-TrashPanel-forceMotion {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.jp-TrashPanel-forceMotion {
+  padding: 0 4px;
+  border: 1px solid var(--jp-border-color2);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--jp-ui-font-color1);
+  cursor: pointer;
+}
+
+.jp-TrashPanel-forceMotion[aria-pressed='true'] {
+  border-color: var(--jp-brand-color1);
 }
 
 /* Breadcrumb row: shown only inside a folder. It wraps, so every segment of
@@ -216,6 +249,14 @@
   background: var(--jp-layout-color3);
 }
 
+/* The row the arrow keys point at. The inset ring shows on the hover
+   background and on the selected background alike, and only while the list
+   holds the keyboard focus. */
+.jp-TrashPanel-list:focus .jp-TrashPanel-item.jp-mod-active {
+  outline: var(--jp-focus-outline-width, 2px) solid var(--jp-ui-font-color0);
+  outline-offset: calc(-1 * var(--jp-focus-outline-width, 2px));
+}
+
 /* Disable hover on other items when context menu is open */
 .jp-TrashPanel.jp-mod-contextMenuOpen
   .jp-TrashPanel-list
@@ -336,12 +377,19 @@
   animation: jp-trash-panel-spin 0.7s linear infinite;
 }
 
-/* The rotation carries "busy", not information, so under a reduced-motion
-   preference it becomes the same glyph held still and dimmed. */
+/* Under a reduced-motion preference the spinners keep turning: the rotation
+   is the whole busy signal, so only the opacity drops. Force motion off
+   returns the animations to the system and stops them. */
 @media (prefers-reduced-motion: reduce) {
   .jp-TrashPanel-header-button.jp-mod-spinning svg,
   .jp-TrashPanel-loadingSpinner {
     opacity: 0.5;
+  }
+
+  .jp-TrashPanel:not(.jp-mod-force-motion)
+    .jp-TrashPanel-header-button.jp-mod-spinning
+    svg,
+  .jp-TrashPanel:not(.jp-mod-force-motion) .jp-TrashPanel-loadingSpinner {
     animation: none;
   }
 }

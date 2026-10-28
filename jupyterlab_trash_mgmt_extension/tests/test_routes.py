@@ -3,15 +3,20 @@
 import json
 import os
 import shutil
+import threading
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from jupyterlab_trash_mgmt_extension.routes import (
+    clear_dir_sizes,
     format_size,
     get_dir_size,
+    get_dir_size_cached,
     get_item_size,
     get_trash_dir,
+    invalidate_dir_size,
     parse_trashinfo,
 )
 
@@ -89,6 +94,55 @@ class TestHelperFunctions:
         size = get_item_size(nonexistent)
         assert size == 0
 
+    def test_cached_directory_size_equals_a_fresh_walk_with_a_symlink(self, tmp_path):
+        """The cached size matches a fresh walk of the same folder, symlink included."""
+        clear_dir_sizes()
+        outside = tmp_path / "outside.bin"
+        outside.write_bytes(b"x" * 100_000)
+        folder = tmp_path / "folder"
+        (folder / "sub").mkdir(parents=True)
+        (folder / "sub" / "file.txt").write_bytes(b"12345")
+        os.symlink(outside, folder / "link")
+
+        get_dir_size_cached(folder)  # fill the cache
+        cached = get_dir_size_cached(folder)  # served from the cache
+        fresh = get_dir_size(folder)  # walk the folder now
+
+        assert cached == fresh
+        assert cached < outside.stat().st_size
+
+    def test_walk_started_before_invalidation_is_not_cached(self, tmp_path, monkeypatch):
+        """A walk that saw a nested file must not cache its size after that file is deleted."""
+        clear_dir_sizes()
+        folder = tmp_path / "folder"
+        (folder / "sub" / "later").mkdir(parents=True)
+        (folder / "sub" / "doomed.txt").write_bytes(b"x" * 1000)
+
+        walk_blocked = threading.Event()
+        release_walk = threading.Event()
+        real_scandir = os.scandir
+
+        def blocking_scandir(path):
+            if Path(path).name == "later":
+                walk_blocked.set()
+                assert release_walk.wait(timeout=10)
+            return real_scandir(path)
+
+        monkeypatch.setattr(os, "scandir", blocking_scandir)
+        sizes = []
+        walker = threading.Thread(target=lambda: sizes.append(get_dir_size_cached(folder)))
+        walker.start()
+        assert walk_blocked.wait(timeout=10)
+
+        (folder / "sub" / "doomed.txt").unlink()
+        invalidate_dir_size(folder / "sub" / "doomed.txt")
+        release_walk.set()
+        walker.join(timeout=10)
+        assert not walker.is_alive()
+        assert sizes == [1000]
+
+        assert get_dir_size_cached(folder) == get_dir_size(folder)
+
     def test_parse_trashinfo_valid(self, tmp_path):
         """Test parse_trashinfo with valid trashinfo file."""
         info_file = tmp_path / "test.trashinfo"
@@ -98,7 +152,23 @@ DeletionDate=2024-01-15T10:30:00
 """)
         result = parse_trashinfo(info_file)
         assert result["original_path"] == "/home/user/documents/important.txt"
-        assert result["deletion_date"] == "2024-01-15T10:30:00"
+        converted = datetime.fromisoformat(result["deletion_date"])
+        assert converted.utcoffset() is not None
+        assert converted.replace(tzinfo=None) == datetime(2024, 1, 15, 10, 30)
+
+    def test_parse_trashinfo_unparseable_deletion_date(self, tmp_path):
+        """Test an unparseable DeletionDate comes back unchanged."""
+        info_file = tmp_path / "test.trashinfo"
+        info_file.write_text("[Trash Info]\nPath=/home/user/test.txt\nDeletionDate=not-a-date\n")
+        result = parse_trashinfo(info_file)
+        assert result["deletion_date"] == "not-a-date"
+
+    def test_parse_trashinfo_missing_deletion_date(self, tmp_path):
+        """Test a missing DeletionDate stays empty."""
+        info_file = tmp_path / "test.trashinfo"
+        info_file.write_text("[Trash Info]\nPath=/home/user/test.txt\n")
+        result = parse_trashinfo(info_file)
+        assert result["deletion_date"] == ""
 
     def test_parse_trashinfo_url_encoded(self, tmp_path):
         """Test parse_trashinfo handles URL-encoded paths."""

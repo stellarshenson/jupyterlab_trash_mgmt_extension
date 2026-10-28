@@ -48,7 +48,17 @@ fields = ["description", "authors", "urls", "keywords"]
 
 [tool.hatch.build.targets.sdist]
 artifacts = ["jupyterlab_trash_mgmt_extension/labextension"]
-exclude = [".github", "binder"]
+exclude = [
+    ".github",
+    "binder",
+    ".claude",
+    ".agents",
+    ".playwright-mcp",
+    "docs",
+    "tmp",
+    "logs",
+    "coverage",
+]
 
 [tool.hatch.build.targets.wheel.shared-data]
 "jupyterlab_trash_mgmt_extension/labextension" = "share/jupyter/labextensions/jupyterlab_trash_mgmt_extension"

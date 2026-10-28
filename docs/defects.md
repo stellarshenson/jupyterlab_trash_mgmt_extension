@@ -34,12 +34,25 @@ REST handlers under `jupyterlab-trash-mgmt-extension/`
   - log: 2026-10-13T22:42:26Z @kj added
   - log: 2026-10-13T22:42:40Z @kj found by review round 1 (architect); reproduced: `test_restore_onto_a_broken_symlink_is_409` fails on the unfixed handler with `DID NOT RAISE HTTPClientError`
   - log: 2026-10-13T23:27:16Z @kj closed
-- [ ] `DEF-API-18` **deletion time has no time zone** - MINOR; `list` passes `DeletionDate` through as server local time with no offset; the browser reads it as browser local time, so the shown age is wrong by the zone difference between server and browser; a time ahead of the browser clock reads `just now`; present at HEAD; owner decision
+- [x] `DEF-API-18` **deletion time has no time zone** - MINOR; `list` passes `DeletionDate` through as server local time with no offset; the browser reads it as browser local time, so the shown age is wrong by the zone difference between server and browser; a time ahead of the browser clock reads `just now`; present at HEAD; owner decision
+  - evidence: pytest -q jupyterlab_trash_mgmt_extension/tests: 72 passed; test_parse_trashinfo_valid (naive 10:30 comes back +01:00, wall time kept), test_parse_trashinfo_unparseable_deletion_date and test_parse_trashinfo_missing_deletion_date passed; direct probe: +02:00 input returns 09:30+01:00, the same instant, not double-converted
   - repro: run the server with `TZ=UTC` and the browser in another zone, trash a file; the age is off by the zone difference
   - test-tags: MANUAL
   - root-cause: 2026-10-13T23:10:34Z @kj `send2trash` writes `DeletionDate` with `datetime.now()` and no offset; `get_trash_metadata` returns the string unchanged and `_formatRelativeTime` parses it with `new Date()`
   - log: 2026-10-13T23:10:34Z @kj added
   - log: 2026-10-13T23:10:35Z @kj found while measuring the time column for DEF-PANEL-11; not from a reviewer; not changed in this work
+  - log: 2026-10-28T21:05:22Z @kj closed
+- [x] `DEF-API-19-EMPTY-FREEZE` **emptying a large trash freezes the whole server** - CRITICAL; Empty Trash on 22,895 items / 48.7 GB stops every request in the lab until the delete ends: websockets drop, kernels miss heartbeats, extensions time out; list re-walks the whole trash every 10 s, so the same stall repeats while the panel is open; cause in root-cause; fix: handlers off the IOLoop plus cached directory sizes; jupyterlab_trash_mgmt_extension/routes.py
+  - evidence: regression-verify PASS: nested restore and nested delete at depth 2 show a fresh 5 B size (15 B to 5 B, matching a fresh walk); two concurrent empties both succeed (71 + 49 deleted, 0 files and 0 trashinfo left); a folder removed before listing returns 404 JSON, not 500; make test exit 0 (jest 49 passed, pytest 70 passed, auth gate green); list ping max 6.4 ms and empty ping max 4.3 ms against 200 ms (before 1215.1 and 1409.4 ms); Galata browser max /api/status 13.0 ms over 58 samples vs 2972.1 ms old (prove run 133.9 vs 3015.1 ms; bar 1000 ms)
+  - repro: open the panel on a trash of tens of thousands of items and press Empty Trash; measured on the 3,400-item / 60,000-file synthetic trash: list ping max 1215.1 ms and empty ping max 1409.4 ms against a 200 ms bar (tmp/workflows/trash-empty-perf/bench-before.json)
+  - test-tags: INTEGRATION, UNIT
+  - root-cause: 2026-10-28T20:31:07Z @kj TrashEmptyHandler.post and the other handlers are synchronous defs, so Tornado runs shutil.rmtree and every recursive size walk on the IOLoop thread; list repeats the walk on the panel's 10 s poll (src/widget.ts:11)
+  - log: 2026-10-28T20:31:07Z @kj added; reason: reported by @kj on 2026-10-22; measured block 1215 ms for list and 1409 ms for empty on a 60,000-file synthetic trash
+  - log: 2026-10-28T20:40:09Z @kj edited repro "open the panel on a trash of tens of thousands of items and press Empty Trash; a websocket in another tab fails until the delete ends" -> "open the panel on a trash of tens of thousands of items and press Empty Trash; measured on the 3,400-item / 60,000-file synthetic trash: list ping max 1215.1 ms and empty ping max 1409.4 ms against a 200 ms bar (tmp/workflows/trash-empty-perf/bench-before.json)"
+  - log: 2026-10-28T20:40:14Z @kj perf-verify: freeze fixed, list ping max 5.7 ms and empty ping max 4.8 ms (bar 200 ms), down from 1215.1 and 1409.4 ms; make test green (jest 49, pytest 66); second list 2.06x, below the 5x criterion; nested-mutation stale-size regression found; left open
+  - log: 2026-10-28T20:44:26Z @kj Galata E2E (ui-tests/tests/trash-empty-performance.spec.ts): 10,000 seeded files in 4,000 entries, Empty Trash POST 3189 ms versus 3056 ms old, max /api/status latency 13.0 ms over 58 samples versus 2972.1 ms old (bar 1000 ms); fixed passes, old handler fails
+  - log: 2026-10-28T20:48:50Z @kj regression-verify PASS: nested restore and nested delete at depth 2 show a fresh 5 B size (15 B to 5 B, matching a fresh walk); two concurrent empties both succeed (71 + 49 deleted, 0 files and 0 trashinfo left); a folder removed before listing returns 404 JSON, not 500; make test exit 0 (jest 49 passed, pytest 70 passed, auth gate green); list ping max 6.4 ms and empty ping max 4.3 ms against 200 ms (before 1215.1 and 1409.4 ms); Galata browser max /api/status 13.0 ms over 58 samples vs 2972.1 ms old (prove run 133.9 vs 3015.1 ms; bar 1000 ms); reason: the closing proof must quote the regression cases, test counts, bench and browser numbers
+  - log: 2026-10-28T20:48:54Z @kj closed; reason: same numbers as the preceding log line
 
 ## Trash side panel `PANEL`
 
@@ -101,26 +114,44 @@ Lumino widget in `src/widget.ts`
   - log: 2026-10-13T22:42:27Z @kj added
   - log: 2026-10-13T22:42:41Z @kj found by review round 1 (both lenses); label unchanged from HEAD; deferred by the adjudicator for the change budget of round 1
   - log: 2026-10-13T23:27:16Z @kj closed
-- [ ] `DEF-PANEL-13` **rows with an equal sort key keep the server order** - MINOR; inside a folder all rows share one deletion time, so the default sort leaves them in directory order while the header shows a sort arrow; fix: compare names when the keys are equal; `src/widget.ts`
+- [x] `DEF-PANEL-13` **rows with an equal sort key keep the server order** - MINOR; inside a folder all rows share one deletion time, so the default sort leaves them in directory order while the header shows a sort arrow; fix: compare names when the keys are equal; `src/widget.ts`
+  - evidence: jest `sort tie-break > sorts rows with an equal deletion date by name` and `sort tie-break > keeps the tie order in both directions` pass; verify PASS_WITH_FINDINGS, jlpm test 57 passed, 0 failed; probe confirmed the tie order in both directions and across a reload
   - repro: open a trashed folder with 10 files; the list is not alphabetical
   - test-tags: UNIT
   - root-cause: 2026-10-13T22:42:27Z @kj the comparator in `_getSortedItems` returns 0 for equal keys and the server lists in `iterdir()` order
   - log: 2026-10-13T22:42:27Z @kj added
   - log: 2026-10-13T22:42:41Z @kj found by review round 1 (both lenses); visible in `tmp/shots/13-light-inside-folder.png`; deferred by the adjudicator for the change budget of round 1
   - log: 2026-10-13T23:22:23Z @kj review round 3: the adjudicator withdrew the promotion and left it open for defect work outside the review loop; the remedy counts as a new mechanism for a MINOR; owner decision
-- [ ] `DEF-PANEL-14` **shift-click anchor ignores a sort change** - MINOR; click a row, change the sort, shift-click another row: the range starts at the row that now sits at the old index, not at the clicked row; fix: hold the anchor as `trash_path`; `src/widget.ts`
+  - log: 2026-10-28T21:03:03Z @kj closed
+- [x] `DEF-PANEL-14` **shift-click anchor ignores a sort change** - MINOR; click a row, change the sort, shift-click another row: the range starts at the row that now sits at the old index, not at the clicked row; fix: hold the anchor as `trash_path`; `src/widget.ts`
+  - evidence: jest `selection > starts the range at the clicked row after a sort change` and `selection > keeps the shift-click anchor across the background refresh` pass; verify PASS_WITH_FINDINGS, jlpm test 57 passed, 0 failed; probe confirmed click selection and shift-click range survive a sort change and a background reload
   - repro: rows a, b, c sorted by name; click a; reverse the sort; shift-click b; c and b are selected
   - test-tags: UNIT
   - root-cause: 2026-10-13T22:42:27Z @kj the anchor is the row index `_lastClickedIndex`; `_handleSort` reorders the rows and leaves the index unchanged
   - log: 2026-10-13T22:42:27Z @kj added
   - log: 2026-10-13T22:42:41Z @kj found by review round 1 (architect), reproduced by the reviewer under jest; deferred by the adjudicator for the change budget of round 1
   - log: 2026-10-13T23:22:23Z @kj review round 3: the adjudicator withdrew the promotion and left it open for defect work outside the review loop; the remedy counts as a new mechanism for a MINOR; owner decision
-- [ ] `DEF-PANEL-15` **rows cannot be operated by keyboard** - MAJOR; no row takes focus: select, open folder, Restore and Delete Permanently work by mouse only; breadcrumb focus drops to the page body at every 10 s reload; needs a keyboard model (one tab stop, arrow keys, Enter, Space, menu key, roles); owner decision; `src/widget.ts`
+  - log: 2026-10-28T21:03:08Z @kj closed
+- [x] `DEF-PANEL-15` **rows cannot be operated by keyboard** - MAJOR; no row takes focus: select, open folder, Restore and Delete Permanently work by mouse only; breadcrumb focus drops to the page body at every 10 s reload; needs a keyboard model (one tab stop, arrow keys, Enter, Space, menu key, roles); owner decision; `src/widget.ts`
+  - evidence: jest `keyboard model > is one listbox tab stop and moves the active row with the arrows`, `keyboard model > toggles the active row selection with Space`, `keyboard model > opens the active folder with Enter`, `keyboard model > opens the row menu with Shift+F10 and the menu key` and `keyboard model > keeps the active row across a background reload` all pass; verify PASS_WITH_FINDINGS, jlpm test 57 passed, 0 failed, 20 probe tests passed
   - repro: press Tab through the panel; focus goes to Empty Trash, Refresh, the list container, then leaves the panel
   - test-tags: MANUAL
   - root-cause: 2026-10-13T22:42:27Z @kj `src/widget.ts` sets no tabindex, no keydown listener and no role; rows and breadcrumb are rebuilt on every load and focus is not restored
   - log: 2026-10-13T22:42:27Z @kj added
   - log: 2026-10-13T22:42:41Z @kj found by review round 1 (ux-designer); select, Restore and Delete were mouse only at HEAD; deferred by the adjudicator: a new interaction model that needs the owner decision and its own acceptance criteria
+  - log: 2026-10-28T21:03:16Z @kj closed; reason: the five jest case names are quoted verbatim, which does not fit 50 words
+- [x] `DEF-PANEL-21-KEYFOCUS` **keyboard focus drops to body and mouse clicks leave no active row** - MEDIUM; From the panel verifier. Leaving a folder through the focused breadcrumb, closing the keyboard-opened context menu, and emptying the trash all drop focus to BODY. A mouse click selects a row but does not make it active, so Space and Enter afterwards do nothing. File src/widget.ts: breadcrumb rebuild around line 364, context-menu aboutToClose around line 85, click handler around line 506, list hidden on empty around line 458.
+  - evidence: jest focus edges 4/4 pass (breadcrumb activation, keyboard menu close, click then Space, empty hides list); make test exit 0 2026-10-28: jest 61 passed, pytest 72 passed, auth gate passed
+  - repro: trash panel: focus the Trash breadcrumb inside folder a and activate it -> BODY; focus the list, open the context menu with the ContextMenu key and close it -> BODY
+  - log: 2026-10-28T21:05:26Z @kj added; reason: filed from the panel verifier findings
+  - log: 2026-10-28T21:16:11Z @kj closed
+- [x] `DEF-PANEL-22-ACTIVE-RING` **Active-row indicator fails contrast and ignores focus** - MAJOR; the active-row indicator failed contrast, 2.45:1 light and 1.98:1 dark against the selected background, and stayed visible while the list held no focus
+  - evidence: browser measurement in the rebuilt panel: active-row ring on the selected background 11.178:1 light and 6.193:1 dark (floor 3.0), outline-style none while the list held no focus; make test exit 0 (jest 66 passed, pytest 73 passed); Galata 5/5 passed
+  - repro: focus the list, read the ring against the selected background: 2.45:1 light, 1.98:1 dark; move focus to Refresh and the ring stays
+  - test-tags: MANUAL
+  - root-cause: 2026-10-28T22:21:19Z @kj the outline used the brand colour and the rule was not focus-scoped
+  - log: 2026-10-28T22:21:19Z @kj added
+  - log: 2026-10-28T22:21:22Z @kj closed
 
 ## Test suite `TEST`
 
@@ -151,10 +182,28 @@ README, package metadata and the files a release publishes
   - log: 2026-10-13T22:42:27Z @kj added
   - log: 2026-10-13T22:42:41Z @kj found by review round 1 (architect); the floor moved to 4.6 with the dependency upgrade of this change
   - log: 2026-10-13T23:25:55Z @kj closed
-- [ ] `DEF-DIST-17` **source distribution ships working files** - MINOR; the sdist holds `.claude/CLAUDE.md`, `.claude/JOURNAL.md`, `.claude/settings.local.json`, `.playwright-mcp/*.yml`, `docs/acc-crit.md`, `docs/defects.md`; owner decision before the next release; `pyproject.toml`
+- [x] `DEF-DIST-17` **source distribution ships working files** - MINOR; the sdist holds `.claude/CLAUDE.md`, `.claude/JOURNAL.md`, `.claude/settings.local.json`, `.playwright-mcp/*.yml`, `docs/acc-crit.md`, `docs/defects.md`; owner decision before the next release; `pyproject.toml`
+  - evidence: python -m build --sdist built the 1.1.13 sdist; tar tzf (54 entries) shows no .claude, .agents, .playwright-mcp, docs, tmp, logs or coverage path, and holds pyproject.toml, README.md and jupyterlab_trash_mgmt_extension/{__init__,routes,_version}.py; the wheel keeps 7 labextension shared-data entries
   - repro: run `tar tzf dist/jupyterlab_trash_mgmt_extension-*.tar.gz` and look for `.claude`, `.playwright-mcp` and `docs`
   - test-tags: MANUAL
   - root-cause: 2026-10-13T22:42:27Z @kj `[tool.hatch.build.targets.sdist]` excludes only `.github` and `binder`; `.claude/settings.local.json` and `.playwright-mcp/` are in no ignore file that hatchling reads
   - log: 2026-10-13T22:42:27Z @kj added
   - log: 2026-10-13T22:42:41Z @kj found by review round 1 (architect); `.claude` was shipped before this change, `docs/` and `.playwright-mcp/` are new; ruled outside the review bar
+  - log: 2026-10-28T21:05:20Z @kj closed
+
+## Spinner animation `MOTION`
+
+Rotation of the refresh icon and of the loading ring
+
+- log: 2026-10-28T20:58:25Z @kj category created
+
+- [x] `DEF-MOTION-20-SPIN` **spinners stand still under reduced motion** - MINOR; with the system set to reduce motion both spinners stop: the refresh icon does not turn during a load and the loading ring holds still; cause in root-cause; fix: delete the animation: none rule, keep the dimming; style/base.css
+  - evidence: rebuild replaced the served bundle (md5 96147f26 -> da634503100a45cb94b1af234d6c7d53); Galata spec spinner-motion.spec.ts reports computed animation-name jp-trash-panel-spin for the header svg and .jp-TrashPanel-loadingSpinner under both reduce and no-preference; full Galata suite 4/4 passed
+  - related: ACC-MOTION-58-SPIN
+  - repro: set the OS to prefer reduced motion, open the Trash panel, click Refresh; neither spinner rotates
+  - test-tags: E2E
+  - root-cause: 2026-10-28T20:58:25Z @kj style/base.css:341 sets animation: none for .jp-TrashPanel-header-button.jp-mod-spinning svg and .jp-TrashPanel-loadingSpinner under @media (prefers-reduced-motion: reduce); shipped in every release up to 1.1.13
+  - log: 2026-10-28T20:58:25Z @kj added; reason: reported by @kj on 2026-10-28 while emptying the large trash; paired with acceptance criterion ACC-MOTION-58-SPIN
+  - log: 2026-10-28T20:58:29Z @kj fix in the working tree: the reduced-motion block now only dims; ui-tests/tests/spinner-motion.spec.ts asserts computed animation-name jp-trash-panel-spin under both motion preferences; the browser run fails today only because the installed labextension bundle predates the CSS fix (static/232.2e456271cee51023.js still carries animation: none), so the rebuild-and-reinstall workflow reruns it before the criterion closes; reason: state of the fix between filing and the rebuilt frontend
+  - log: 2026-10-28T21:08:32Z @kj closed; reason: browser evidence from the rebuilt frontend
 

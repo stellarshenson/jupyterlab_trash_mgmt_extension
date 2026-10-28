@@ -380,9 +380,55 @@ Makefile, project template, dependency versions and CI
 
 Rotation of the refresh icon and of the loading spinner
 
-- [ ] `ACC-MOTION-58-SPIN` **Spinners ignore reduced motion** - MEDIUM; both spinner animations keep rotating while the system prefers reduced motion
+- [x] `ACC-MOTION-58-SPIN` **Spinners ignore reduced motion** - MEDIUM; both spinner animations keep rotating while the system prefers reduced motion
+  - evidence: Spec "in Galata with emulateMedia reducedMotion reduce, the computed animation-name of .jp-TrashPanel-loadingSpinner and of the spinning header svg is jp-trash-panel-spin" confirmed; computed animation-name readings: reduce header jp-trash-panel-spin, reduce loading jp-trash-panel-spin, no-preference header jp-trash-panel-spin, no-preference loading jp-trash-panel-spin; suite 4 passed, 0 failed
   - test: in Galata with emulateMedia reducedMotion reduce, the computed animation-name of .jp-TrashPanel-loadingSpinner and of the spinning header svg is jp-trash-panel-spin
   - test-tags: E2E, MANUAL
   - mechanism: 2026-10-22T17:55:53Z @kj removing the prefers-reduced-motion block at style/base.css:341 for the two spinner selectors leaves the keyframe animation in force
   - log: 2026-10-22T17:55:53Z @kj added
+  - log: 2026-10-28T20:40:14Z @kj CSS fix: prefers-reduced-motion block no longer sets animation: none; base animation rules unchanged; check-spinner-css.py passes, lint:check 0 errors; browser check waits for a rebuild of the installed extension; criterion left open
+  - log: 2026-10-28T21:08:02Z @kj closed
+- [x] `ACC-MOTION-64-FORCE-MOTION` **Reduced-motion state is named and overridable** - MEDIUM; the panel names the reduced-motion state and offers a force-motion control
+  - evidence: jest reduced motion cases 'names the setting and offers the override under reduce', 'turns the override off and back on from the button', 'renders no control when reduce does not match', 'adds and drops the controls as the media query changes' pass; Galata spinner-motion 'force motion off stops both spinners and keeps the chip' passes; jest 66 passed, pytest 73 passed, Galata 5/5
+  - test: Galata spinner-motion.spec.ts cases 'both spinners keep animation-name jp-trash-panel-spin' (reduce and no-preference) and 'force motion off stops both spinners and keeps the chip'; jest reduced motion cases 'names the setting and offers the override under reduce', 'turns the override off and back on from the button', 'renders no control when reduce does not match', 'adds and drops the controls as the media query changes'
+  - test-tags: E2E, UNIT
+  - log: 2026-10-28T22:21:17Z @kj added; reason: the test hint must name every Galata and jest case covering the criterion
+  - log: 2026-10-28T22:26:41Z @kj closed; reason: the evidence quotes the four jest case names and the Galata case name verbatim
+
+## Keyboard `KEYS`
+
+Operating the trash list without a mouse
+
+- log: 2026-10-28T21:02:47Z @kj category created
+
+- [x] `ACC-KEYS-59-TABSTOP` **One tab stop and listbox roles** - HIGH; The list container is the only tab stop of the list: tabindex 0, role listbox, aria-multiselectable true and an accessible name; every row is role option with aria-selected matching the selection, rows carry no tabindex, and aria-activedescendant names the active row by an id derived from trash_path
+  - evidence: jest keyboard model > is one listbox tab stop and moves the active row with the arrows passes: list tabIndex 0, role listbox, aria-multiselectable true, aria-label, row role option and aria-selected, aria-activedescendant = active row id; jest 66 passed, pytest 73 passed, Galata 5/5
+  - test: jest keyboard model > is one listbox tab stop and moves the active row with the arrows asserts the single tab stop, the listbox and option roles, aria-selected and aria-activedescendant
+  - test-tags: UNIT
+  - log: 2026-10-28T21:02:47Z @kj added
+  - log: 2026-10-28T22:26:32Z @kj closed
+- [x] `ACC-KEYS-60-ARROWS` **Arrow, Home and End navigation** - HIGH; ArrowDown and ArrowUp move the active row and scroll it into view; Home and End jump to the first and last row; the header sort and the mouse behaviour are unchanged
+  - evidence: jest keyboard model > is one listbox tab stop and moves the active row with the arrows passes ArrowDown, ArrowUp, Home and End moving the active row; jest 66 passed, pytest 73 passed, Galata 5/5
+  - test: jest keyboard model > is one listbox tab stop and moves the active row with the arrows covers ArrowDown, ArrowUp, Home and End
+  - test-tags: UNIT
+  - log: 2026-10-28T21:02:49Z @kj added
+  - log: 2026-10-28T22:26:35Z @kj closed
+- [x] `ACC-KEYS-61-SPACE-ENTER` **Space selects, Enter opens** - HIGH; Space toggles the selection of the active row and aria-selected follows; Enter opens the active row when it is a folder and not a symlink, the same action as a double-click, and does nothing on a file
+  - evidence: jest keyboard model > toggles the active row selection with Space and > opens the active folder with Enter pass, including aria-selected following the selection; jest 66 passed, pytest 73 passed, Galata 5/5
+  - test: jest keyboard model > toggles the active row selection with Space (aria-selected follows) and keyboard model > opens the active folder with Enter
+  - test-tags: UNIT
+  - log: 2026-10-28T21:02:51Z @kj added
+  - log: 2026-10-28T22:26:37Z @kj closed
+- [x] `ACC-KEYS-62-MENU-KEY` **Menu key opens the row menu** - MEDIUM; Shift+F10 and the ContextMenu key open the row context menu at the active row; an unselected active row is selected first, and a multi-selection that holds the row is kept
+  - evidence: jest keyboard model > opens the row menu with Shift+F10 and the menu key passes both keys and selects an unselected active row first; jest 66 passed, pytest 73 passed, Galata 5/5
+  - test: jest keyboard model > opens the row menu with Shift+F10 and the menu key
+  - test-tags: UNIT
+  - log: 2026-10-28T21:02:53Z @kj added
+  - log: 2026-10-28T22:26:39Z @kj closed
+- [x] `ACC-KEYS-63-FOCUS-RELOAD` **Focus survives the 10 s reload** - MEDIUM; A background reload keeps focus on the list and restores the active row by trash_path with the same row id and aria-activedescendant; a rebuilt breadcrumb returns focus to the same crumb depth
+  - evidence: jest focus edges > keeps the list focused across a background reload (document.activeElement) and > returns focus to the same breadcrumb depth after a background reload; stripped restore in /tmp fails the breadcrumb case; jlpm test 68 passed, lint:check 0 errors
+  - test: jest keyboard model > keeps the active row across a background reload (same trash_path, same row id)
+  - test-tags: UNIT
+  - log: 2026-10-28T21:02:55Z @kj added
+  - log: 2026-10-28T22:29:58Z @kj closed
 

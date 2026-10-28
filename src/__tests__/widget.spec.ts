@@ -121,6 +121,15 @@ async function open(routes: Record<string, Route>): Promise<TrashWidget> {
   return widget;
 }
 
+/** Run the first load, then attach the widget, so `focus()` works. */
+async function openAttached(
+  routes: Record<string, Route>
+): Promise<TrashWidget> {
+  const widget = await open(routes);
+  document.body.appendChild(widget.node);
+  return widget;
+}
+
 const find = <T extends HTMLElement = HTMLElement>(
   widget: TrashWidget,
   selector: string
@@ -167,6 +176,45 @@ function click(element: HTMLElement, modifiers: MouseEventInit = {}): void {
   );
 }
 
+function press(
+  element: HTMLElement,
+  key: string,
+  modifiers: KeyboardEventInit = {}
+): void {
+  element.dispatchEvent(
+    new KeyboardEvent('keydown', { key, bubbles: true, ...modifiers })
+  );
+}
+
+/** Install a controllable `prefers-reduced-motion` query on the window. */
+function mockReducedMotion(matches: boolean) {
+  const listeners: Array<() => void> = [];
+  const query = {
+    matches,
+    addEventListener: (_type: string, listener: () => void) =>
+      listeners.push(listener)
+  };
+  window.matchMedia = jest.fn(
+    () => query
+  ) as unknown as typeof window.matchMedia;
+  return {
+    set(next: boolean) {
+      query.matches = next;
+      listeners.forEach(listener => listener());
+    }
+  };
+}
+
+const listBox = (widget: TrashWidget) =>
+  find<HTMLElement>(widget, '.jp-TrashPanel-list');
+
+const activeRow = (widget: TrashWidget): HTMLElement | null =>
+  widget.node.querySelector<HTMLElement>('.jp-TrashPanel-item.jp-mod-active');
+
+const activeName = (widget: TrashWidget): string | undefined =>
+  activeRow(widget)?.querySelector('.jp-TrashPanel-item-name')?.textContent ??
+  undefined;
+
 /** A trash that holds folder `a` with a file and the folder `b` inside. */
 const nestedRoutes = (): Record<string, Route> => ({
   list: listOf([folder('a'), file('top.txt')]),
@@ -191,6 +239,8 @@ beforeEach(() => {
 
 afterEach(() => {
   jest.useRealTimers();
+  document.body.innerHTML = '';
+  delete (window as any).matchMedia;
 });
 
 describe('header', () => {
@@ -259,7 +309,9 @@ describe('summary bar', () => {
   it('has no caret and does nothing on click', async () => {
     const widget = await open({ list: listOf([file('one.txt')]) });
     const calls = request.mock.calls.length;
-    expect(summary(widget).children).toHaveLength(0);
+    expect(
+      summary(widget).querySelector('.jp-TrashPanel-sortArrow')
+    ).toBeNull();
     click(summary(widget));
     await settle();
     expect(rowNames(widget)).toEqual(['one.txt']);
@@ -269,6 +321,61 @@ describe('summary bar', () => {
   it('describes the folder in view', async () => {
     const widget = await openInsideA();
     expect(summary(widget).textContent).toBe('2 items · 18 B');
+  });
+});
+
+describe('reduced motion', () => {
+  const chip = (widget: TrashWidget) =>
+    widget.node.querySelector<HTMLElement>('.jp-TrashPanel-motionChip');
+  const forceButton = (widget: TrashWidget) =>
+    widget.node.querySelector<HTMLButtonElement>('.jp-TrashPanel-forceMotion');
+
+  it('names the setting and offers the override under reduce', async () => {
+    mockReducedMotion(true);
+    const widget = await open({ list: listOf([]) });
+    expect(chip(widget)?.textContent).toBe('reduced motion');
+    expect(forceButton(widget)?.textContent).toBe('force motion');
+    expect(forceButton(widget)?.getAttribute('aria-pressed')).toBe('true');
+    expect(widget.node.classList).toContain('jp-mod-force-motion');
+  });
+
+  it('turns the override off and back on from the button', async () => {
+    mockReducedMotion(true);
+    const widget = await open({ list: listOf([]) });
+    const button = forceButton(widget)!;
+
+    click(button);
+    expect(widget.node.classList).not.toContain('jp-mod-force-motion');
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+
+    click(button);
+    expect(widget.node.classList).toContain('jp-mod-force-motion');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('renders no control when reduce does not match', async () => {
+    mockReducedMotion(false);
+    const widget = await open({ list: listOf([]) });
+    expect(chip(widget)).toBeNull();
+    expect(forceButton(widget)).toBeNull();
+  });
+
+  it('adds and drops the controls as the media query changes', async () => {
+    const motion = mockReducedMotion(false);
+    const widget = await open({ list: listOf([]) });
+    expect(chip(widget)).toBeNull();
+
+    motion.set(true);
+    expect(chip(widget)?.textContent).toBe('reduced motion');
+    expect(forceButton(widget)?.getAttribute('aria-pressed')).toBe('true');
+
+    motion.set(false);
+    expect(chip(widget)).toBeNull();
+    expect(forceButton(widget)).toBeNull();
+
+    motion.set(true);
+    expect(chip(widget)?.textContent).toBe('reduced motion');
+    expect(forceButton(widget)?.getAttribute('aria-pressed')).toBe('true');
   });
 });
 
@@ -640,6 +747,268 @@ describe('selection', () => {
       .filter(call => call[0] === 'restore')
       .map(call => JSON.parse(call[2].body).trash_path);
     expect(bodies.sort()).toEqual(['a/b', 'a/one.txt']);
+  });
+
+  it('starts the range at the clicked row after a sort change', async () => {
+    const widget = await open({
+      list: listOf([file('a.txt'), file('b.txt'), file('c.txt')])
+    });
+    const nameHeader = () =>
+      find(widget, '.jp-TrashPanel-columnHeader .jp-TrashPanel-col-name');
+
+    click(nameHeader());
+    expect(rowNames(widget)).toEqual(['a.txt', 'b.txt', 'c.txt']);
+
+    click(rows(widget)[0]);
+    click(nameHeader());
+    expect(rowNames(widget)).toEqual(['c.txt', 'b.txt', 'a.txt']);
+
+    click(rows(widget)[rowNames(widget).indexOf('b.txt')], {
+      shiftKey: true
+    });
+    expect(selectedNames(widget).sort()).toEqual(['a.txt', 'b.txt']);
+  });
+});
+
+describe('keyboard model', () => {
+  const three = () => listOf([file('a.txt'), file('b.txt'), file('c.txt')]);
+
+  it('is one listbox tab stop and moves the active row with the arrows', async () => {
+    const widget = await open({ list: three() });
+    const list = listBox(widget);
+    expect(list.tabIndex).toBe(0);
+    expect(list.getAttribute('role')).toBe('listbox');
+    expect(list.getAttribute('aria-multiselectable')).toBe('true');
+    expect(list.getAttribute('aria-label')).toBe('Trash items');
+    expect(rows(widget)[0].getAttribute('role')).toBe('option');
+    expect(rows(widget)[0].getAttribute('aria-selected')).toBe('false');
+
+    press(list, 'ArrowDown');
+    expect(activeName(widget)).toBe('a.txt');
+    expect(list.getAttribute('aria-activedescendant')).toBe(
+      activeRow(widget)!.id
+    );
+
+    press(list, 'ArrowDown');
+    expect(activeName(widget)).toBe('b.txt');
+
+    press(list, 'ArrowUp');
+    expect(activeName(widget)).toBe('a.txt');
+
+    press(list, 'End');
+    expect(activeName(widget)).toBe('c.txt');
+
+    press(list, 'Home');
+    expect(activeName(widget)).toBe('a.txt');
+  });
+
+  it('toggles the active row selection with Space', async () => {
+    const widget = await open({ list: three() });
+    const list = listBox(widget);
+
+    press(list, 'ArrowDown');
+    press(list, ' ');
+    expect(selectedNames(widget)).toEqual(['a.txt']);
+    expect(rows(widget)[0].getAttribute('aria-selected')).toBe('true');
+
+    press(list, 'ArrowDown');
+    press(list, ' ');
+    expect(selectedNames(widget).sort()).toEqual(['a.txt', 'b.txt']);
+
+    press(list, ' ');
+    expect(selectedNames(widget)).toEqual(['a.txt']);
+  });
+
+  it('opens the active folder with Enter', async () => {
+    const widget = await open(nestedRoutes());
+    const list = listBox(widget);
+
+    press(list, 'ArrowDown');
+    expect(activeName(widget)).toBe('a');
+    press(list, 'Enter');
+    await settle();
+
+    expect(requested()).toEqual(['list', 'list?path=a']);
+  });
+
+  it('opens the row menu with Shift+F10 and the menu key', async () => {
+    const widget = await open({ list: three() });
+    const list = listBox(widget);
+    const opened = jest
+      .spyOn((widget as any)._contextMenu, 'open')
+      .mockImplementation(() => undefined);
+
+    press(list, 'ArrowDown');
+    press(list, 'F10', { shiftKey: true });
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(selectedNames(widget)).toEqual(['a.txt']);
+
+    press(list, 'ContextMenu');
+    expect(opened).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the active row across a background reload', async () => {
+    const widget = await open({ list: three() });
+    const list = listBox(widget);
+
+    press(list, 'ArrowDown');
+    press(list, 'ArrowDown');
+    const id = activeRow(widget)!.id;
+
+    serve({ list: three() });
+    await (widget as any)._refreshInBackground();
+
+    expect(activeName(widget)).toBe('b.txt');
+    expect(activeRow(widget)!.id).toBe(id);
+    expect(list.getAttribute('aria-activedescendant')).toBe(id);
+  });
+});
+
+describe('row ids', () => {
+  it('renders a path with a lone surrogate and keeps its active id across a reload', async () => {
+    const lone = 'broken-\uDCFF.txt';
+    const routes = { list: listOf([{ name: 'lone', trash_path: lone }]) };
+    const widget = await open(routes);
+    expect(rowNames(widget)).toEqual(['lone']);
+
+    const list = listBox(widget);
+    press(list, 'ArrowDown');
+    const id = activeRow(widget)!.id;
+    expect(id).toMatch(/^jp-trash-row-/);
+
+    serve(routes);
+    await (widget as any)._refreshInBackground();
+
+    expect(activeName(widget)).toBe('lone');
+    expect(activeRow(widget)!.id).toBe(id);
+    expect(list.getAttribute('aria-activedescendant')).toBe(id);
+  });
+});
+
+describe('focus edges', () => {
+  const three = () => listOf([file('a.txt'), file('b.txt'), file('c.txt')]);
+
+  it('moves focus to the list when a focused breadcrumb is activated', async () => {
+    const widget = await openAttached(nestedRoutes());
+    const list = listBox(widget);
+    list.focus();
+    press(list, 'ArrowDown');
+    press(list, 'Enter');
+    await settle();
+    expect(breadcrumb(widget).textContent).toBe('Trash/a');
+
+    const trashCrumb = crumbs(widget)[0];
+    trashCrumb.focus();
+    click(trashCrumb);
+    await settle();
+
+    expect(breadcrumb(widget).hidden).toBe(true);
+    expect(document.activeElement).toBe(list);
+  });
+
+  it('keeps the list focused across a background reload', async () => {
+    const widget = await openAttached({ list: three() });
+    const list = listBox(widget);
+    list.focus();
+    expect(document.activeElement).toBe(list);
+
+    serve({ list: three() });
+    await (widget as any)._refreshInBackground();
+
+    expect(rows(widget).length).toBe(3);
+    expect(document.activeElement).toBe(list);
+  });
+
+  it('returns focus to the same breadcrumb depth after a background reload', async () => {
+    const widget = await openAttached(nestedRoutes());
+    doubleClick(rows(widget)[rowNames(widget).indexOf('a')]);
+    await settle();
+    doubleClick(rows(widget)[rowNames(widget).indexOf('b')]);
+    await settle();
+    expect(breadcrumb(widget).textContent).toBe('Trash/a/b');
+
+    const aCrumb = crumbs(widget)[1];
+    aCrumb.focus();
+    expect(document.activeElement).toBe(aCrumb);
+
+    serve(nestedRoutes());
+    await (widget as any)._refreshInBackground();
+
+    expect(document.activeElement).toBe(crumbs(widget)[1]);
+    expect((document.activeElement as HTMLElement).textContent).toBe('a');
+    expect(document.activeElement).not.toBe(aCrumb);
+  });
+
+  it('returns focus to the list and its active row when the keyboard menu closes', async () => {
+    const widget = await openAttached({ list: three() });
+    const list = listBox(widget);
+    list.focus();
+    press(list, 'ArrowDown');
+    press(list, 'ArrowDown');
+    expect(activeName(widget)).toBe('b.txt');
+
+    press(list, 'ContextMenu');
+    await jest.advanceTimersByTimeAsync(50);
+    expect(document.activeElement).not.toBe(list);
+
+    (widget as any)._contextMenu.close();
+    await jest.advanceTimersByTimeAsync(50);
+
+    expect(document.activeElement).toBe(list);
+    expect(activeName(widget)).toBe('b.txt');
+    expect(list.getAttribute('aria-activedescendant')).toBe(
+      activeRow(widget)!.id
+    );
+  });
+
+  it('makes a clicked row active, so Space toggles it', async () => {
+    const widget = await openAttached({ list: three() });
+    const list = listBox(widget);
+    click(rows(widget)[rowNames(widget).indexOf('b.txt')]);
+
+    expect(activeName(widget)).toBe('b.txt');
+    expect(list.getAttribute('aria-activedescendant')).toBe(
+      activeRow(widget)!.id
+    );
+
+    press(list, ' ');
+    expect(selectedNames(widget)).toEqual([]);
+  });
+
+  it('moves focus to refresh when emptying the trash hides the list', async () => {
+    const widget = await openAttached({ list: three() });
+    const list = listBox(widget);
+    list.focus();
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    serve({ empty: { success: true, deleted_count: 3 }, list: listOf([]) });
+
+    emptyButton(widget).click();
+    await settle();
+
+    expect(list.style.display).toBe('none');
+    expect(document.activeElement).toBe(refreshButton(widget));
+  });
+});
+
+describe('sort tie-break', () => {
+  const unsorted = () => listOf([file('c.txt'), file('a.txt'), file('b.txt')]);
+
+  it('sorts rows with an equal deletion date by name', async () => {
+    const widget = await open({ list: unsorted() });
+    expect(rowNames(widget)).toEqual(['a.txt', 'b.txt', 'c.txt']);
+  });
+
+  it('keeps the tie order in both directions', async () => {
+    const widget = await open({ list: unsorted() });
+    const deletedHeader = () =>
+      find(widget, '.jp-TrashPanel-columnHeader .jp-TrashPanel-col-modified');
+
+    expect(deletedHeader().textContent).toBe('Deleted ▼');
+    expect(rowNames(widget)).toEqual(['a.txt', 'b.txt', 'c.txt']);
+
+    click(deletedHeader());
+    expect(deletedHeader().textContent).toBe('Deleted ▲');
+    expect(rowNames(widget)).toEqual(['a.txt', 'b.txt', 'c.txt']);
   });
 });
 

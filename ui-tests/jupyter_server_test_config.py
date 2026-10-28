@@ -9,7 +9,18 @@ from tempfile import mkdtemp
 
 from jupyterlab.galata import configure_jupyter_server
 
+# The trash of the test server is project-local, set before the server reads
+# it: the developer's real ~/.local/share/Trash is never listed or emptied.
+# Derived from this file so the suite runs wherever it is checked out.
+TRASH_HOME = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".trash-home")
+os.environ["XDG_DATA_HOME"] = TRASH_HOME
+os.makedirs(TRASH_HOME, exist_ok=True)
+
 configure_jupyter_server(c)
+
+# The extension hides its panel unless the contents manager moves deletions
+# to the trash; the panel is what the test drives.
+c.ContentsManager.delete_to_trash = True
 
 # `or`, not a get() default: an exported-but-empty JUPYTER_TEST_PORT would
 # raise here while Playwright waited on the default port.

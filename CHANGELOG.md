@@ -2,6 +2,29 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.14] - 2026-10-29
+
+### Added
+
+- Keyboard control of the list: one tab stop, arrow and Home/End navigation, Space to select, Enter to open a folder, Shift+F10 for the row menu, and focus kept across the 10-second reload
+- A `reduced motion` chip and a `force motion` toggle, on by default, so both spinners keep turning under a reduced-motion preference
+- Galata browser specs for the panel: an Empty Trash run over 10,000 seeded items and the spinner motion under both preferences
+
+### Changed
+
+- Empty Trash and listing no longer block the Jupyter server: the handlers run off the event loop, directory sizes are cached behind an mtime check and an epoch guard, and the walk uses `os.scandir`
+- Deletion times are returned with the server's UTC offset, so the age shown is right from another time zone
+- Rows with an equal sort key break the tie by path, and the shift-click range starts at the clicked row after a sort change
+- The active-row ring is scoped to the focused list and measures 11.18:1 in the light theme and 6.19:1 in the dark one
+
+### Fixed
+
+- Emptying a trash of tens of thousands of items froze every request in the lab until the deletion finished
+- Restoring or deleting a nested item left the folder's cached size stale
+- Two concurrent empties reported failure although the trash was emptied
+- A folder removed while listing answered a generic 500 instead of the endpoint error
+- The spinner stood still under a reduced-motion preference
+
 ## [1.1.13] - 2026-10-22
 
 ### Added

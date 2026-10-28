@@ -34,6 +34,7 @@ type SortDirection = 'asc' | 'desc';
 export class TrashWidget extends Widget {
   private _header: HTMLDivElement;
   private _summary: HTMLDivElement;
+  private _summaryText: HTMLSpanElement;
   private _breadcrumb: HTMLDivElement;
   private _columnHeader: HTMLDivElement;
   private _list: HTMLDivElement;
@@ -43,8 +44,14 @@ export class TrashWidget extends Widget {
   private _refreshBtn: HTMLButtonElement;
   private _commands: CommandRegistry;
   private _contextMenu: Menu;
+  // True while the menu opened from the keyboard is showing
+  private _menuOpenedByKeyboard = false;
   private _selectedItems: Set<ITrashItem> = new Set();
-  private _lastClickedIndex: number = -1;
+  // The row a shift-click ranges from, held by path because sorting moves rows
+  private _lastClickedAnchor: string | null = null;
+  // The row arrow navigation treats as current, held by path because sorting
+  // and every reload rebuild the rows
+  private _activePath: string | null = null;
   private _itemElements: Map<ITrashItem, HTMLElement> = new Map();
   private _items: ITrashItem[] = [];
   private _sortedItems: ITrashItem[] = [];
@@ -61,6 +68,12 @@ export class TrashWidget extends Widget {
   private _loadSeq = 0;
   // Refreshes that currently keep the refresh icon turning
   private _spinCount = 0;
+  // Force-motion override, on by default: the spinners keep turning under a
+  // reduced-motion preference until the user turns it off.
+  private _forceMotion = true;
+  private _motionQuery: MediaQueryList | null = null;
+  private _motionChip: HTMLSpanElement | null = null;
+  private _forceMotionBtn: HTMLButtonElement | null = null;
 
   constructor(serverSettings: ServerConnection.ISettings) {
     super();
@@ -77,9 +90,15 @@ export class TrashWidget extends Widget {
     this._contextMenu.addItem({ command: 'trash:restore' });
     this._contextMenu.addItem({ command: 'trash:delete' });
 
-    // Clear visual state when menu closes (keep selection)
+    // Clear visual state when menu closes (keep selection) and give the
+    // keyboard focus the menu took back to the list it was opened from
     this._contextMenu.aboutToClose.connect(() => {
       this.node.classList.remove('jp-mod-contextMenuOpen');
+      if (!this._menuOpenedByKeyboard) {
+        return;
+      }
+      this._menuOpenedByKeyboard = false;
+      this._focusListOrRefresh();
     });
 
     // Create header: title on the left, action icons on the right. It is
@@ -111,10 +130,26 @@ export class TrashWidget extends Widget {
 
     this.node.appendChild(this._header);
 
-    // Create summary bar: item count and total size of the listed location
+    // Create summary bar: item count and total size of the listed location.
+    // The bar wraps, so both readouts stay visible beside the motion controls.
     this._summary = document.createElement('div');
     this._summary.className = 'jp-TrashPanel-summary';
+    this._summaryText = document.createElement('span');
+    this._summaryText.className = 'jp-TrashPanel-summaryText';
+    this._summary.appendChild(this._summaryText);
     this.node.appendChild(this._summary);
+
+    // Under a reduced-motion preference the bar names the setting and offers
+    // the override. A platform without matchMedia reports no preference.
+    this.node.classList.toggle('jp-mod-force-motion', this._forceMotion);
+    this._motionQuery =
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia('(prefers-reduced-motion: reduce)')
+        : null;
+    this._motionQuery?.addEventListener('change', () =>
+      this._renderMotionControls()
+    );
+    this._renderMotionControls();
 
     // Create breadcrumb row: shown only inside a folder
     this._breadcrumb = document.createElement('div');
@@ -127,9 +162,17 @@ export class TrashWidget extends Widget {
     this._columnHeader.className = 'jp-TrashPanel-columnHeader';
     this.node.appendChild(this._columnHeader);
 
-    // Create list container
+    // Create list container. It is the single tab stop of the keyboard model:
+    // rows are options exposed through aria-activedescendant, never tabindex.
     this._list = document.createElement('div');
     this._list.className = 'jp-TrashPanel-list';
+    this._list.tabIndex = 0;
+    this._list.setAttribute('role', 'listbox');
+    this._list.setAttribute('aria-multiselectable', 'true');
+    this._list.setAttribute('aria-label', 'Trash items');
+    this._list.addEventListener('keydown', (e: KeyboardEvent) =>
+      this._handleListKeyDown(e)
+    );
     this.node.appendChild(this._list);
 
     // Create empty message
@@ -286,9 +329,7 @@ export class TrashWidget extends Widget {
     const selected = new Set(
       sameLocation ? [...this._selectedItems].map(item => item.trash_path) : []
     );
-    const anchor = sameLocation
-      ? this._sortedItems[this._lastClickedIndex]?.trash_path
-      : undefined;
+    const anchor = sameLocation ? this._lastClickedAnchor : null;
 
     this._path = target;
     this._loaded = true;
@@ -297,27 +338,80 @@ export class TrashWidget extends Widget {
       this._items.filter(item => selected.has(item.trash_path))
     );
     this._renderSummary(data);
-    this._renderBreadcrumb();
+    const hadCrumbFocus = this._renderBreadcrumb();
     this._renderColumnHeader();
     this._renderItems();
-    this._lastClickedIndex = this._sortedItems.findIndex(
-      item => item.trash_path === anchor
-    );
+    // A crumb that is gone or no longer focusable still held the focus; the
+    // new location takes it, so the keyboard continues from its list.
+    if (hadCrumbFocus) {
+      this._focusListOrRefresh();
+    }
+    this._lastClickedAnchor =
+      anchor !== null && this._items.some(item => item.trash_path === anchor)
+        ? anchor
+        : null;
   }
 
   private _renderSummary(data: ITrashListResponse): void {
     const count = data.item_count;
     const noun = count === 1 ? 'item' : 'items';
-    this._summary.textContent = `${count} ${noun} \u00B7 ${data.total_size_formatted}`;
+    this._summaryText.textContent = `${count} ${noun} \u00B7 ${data.total_size_formatted}`;
     // Inside a folder the trash holds at least that folder
     this._emptyBtn.hidden = this._path.length === 0 && count === 0;
   }
 
-  private _renderBreadcrumb(): void {
+  /**
+   * Show the reduced-motion chip and the override button while the system
+   * reports the preference, and take both out of the bar when it clears.
+   */
+  private _renderMotionControls(): void {
+    if (this._motionQuery?.matches !== true) {
+      this._motionChip?.remove();
+      this._forceMotionBtn?.remove();
+      this._motionChip = null;
+      this._forceMotionBtn = null;
+      return;
+    }
+    if (this._motionChip === null) {
+      this._motionChip = document.createElement('span');
+      this._motionChip.className = 'jp-TrashPanel-motionChip';
+      this._motionChip.textContent = 'reduced motion';
+
+      this._forceMotionBtn = document.createElement('button');
+      this._forceMotionBtn.className = 'jp-TrashPanel-forceMotion';
+      this._forceMotionBtn.textContent = 'force motion';
+      this._forceMotionBtn.addEventListener('click', () =>
+        this._setForceMotion(!this._forceMotion)
+      );
+      this._summary.append(this._motionChip, this._forceMotionBtn);
+    }
+    this._forceMotionBtn!.setAttribute(
+      'aria-pressed',
+      String(this._forceMotion)
+    );
+  }
+
+  private _setForceMotion(on: boolean): void {
+    this._forceMotion = on;
+    this.node.classList.toggle('jp-mod-force-motion', on);
+    this._forceMotionBtn?.setAttribute('aria-pressed', String(on));
+  }
+
+  /**
+   * Rebuild the crumbs. Returns true when the breadcrumb held the focus and
+   * the rebuilt crumb could not take it back.
+   */
+  private _renderBreadcrumb(): boolean {
+    // The reload rebuilds the crumbs; remember which one held the focus by
+    // its depth so the focus returns to the same place.
+    const focused = Array.from(
+      this._breadcrumb.querySelectorAll<HTMLElement>('.jp-TrashPanel-crumb')
+    ).indexOf(document.activeElement as HTMLElement);
     this._breadcrumb.innerHTML = '';
     this._breadcrumb.hidden = this._path.length === 0;
 
     const labels = ['Trash', ...this._path];
+    const built: HTMLElement[] = [];
     labels.forEach((label, depth) => {
       if (depth > 0) {
         const separator = document.createElement('span');
@@ -341,7 +435,22 @@ export class TrashWidget extends Widget {
         );
       }
       this._breadcrumb.appendChild(crumb);
+      built.push(crumb);
     });
+
+    const restore = built[focused];
+    if (restore instanceof HTMLButtonElement && !this._breadcrumb.hidden) {
+      restore.focus();
+      return false;
+    }
+    return focused >= 0;
+  }
+
+  /** Focus the list, or the refresh button when the list is hidden. */
+  private _focusListOrRefresh(): void {
+    const target =
+      this._list.style.display === 'none' ? this._refreshBtn : this._list;
+    target.focus();
   }
 
   /**
@@ -403,16 +512,21 @@ export class TrashWidget extends Widget {
     const dir = this._sortDirection === 'asc' ? 1 : -1;
 
     items.sort((a, b) => {
+      let order = 0;
       switch (this._sortColumn) {
         case 'name':
-          return dir * a.name.localeCompare(b.name);
+          order = dir * a.name.localeCompare(b.name);
+          break;
         case 'modified':
-          return dir * a.deletion_date.localeCompare(b.deletion_date);
+          order = dir * a.deletion_date.localeCompare(b.deletion_date);
+          break;
         case 'size':
-          return dir * (a.size - b.size);
-        default:
-          return 0;
+          order = dir * (a.size - b.size);
+          break;
       }
+      // A tie must resolve the same way in both directions, or the arrow
+      // claims an order the list does not have; trash_path breaks it.
+      return order !== 0 ? order : a.trash_path.localeCompare(b.trash_path);
     });
 
     return items;
@@ -427,8 +541,13 @@ export class TrashWidget extends Widget {
         this._path.length > 0 ? 'Folder is empty' : 'Trash is empty';
       this._emptyMessage.style.display = 'flex';
       this._columnHeader.style.display = 'none';
+      // A hidden element cannot hold the focus; hand it to the header
+      if (document.activeElement === this._list) {
+        this._refreshBtn.focus();
+      }
       this._list.style.display = 'none';
       this._sortedItems = [];
+      this._restoreActiveRow();
       return;
     }
 
@@ -442,6 +561,7 @@ export class TrashWidget extends Widget {
       this._itemElements.set(item, itemEl);
       this._list.appendChild(itemEl);
     }
+    this._restoreActiveRow();
   }
 
   private _clearSelection(): void {
@@ -449,6 +569,7 @@ export class TrashWidget extends Widget {
       const el = this._itemElements.get(item);
       if (el) {
         el.classList.remove('jp-mod-selected');
+        el.setAttribute('aria-selected', 'false');
       }
     }
     this._selectedItems.clear();
@@ -459,6 +580,7 @@ export class TrashWidget extends Widget {
     const el = this._itemElements.get(item);
     if (el) {
       el.classList.add('jp-mod-selected');
+      el.setAttribute('aria-selected', 'true');
     }
   }
 
@@ -467,14 +589,25 @@ export class TrashWidget extends Widget {
     const el = this._itemElements.get(item);
     if (el) {
       el.classList.remove('jp-mod-selected');
+      el.setAttribute('aria-selected', 'false');
     }
   }
 
   private _handleItemClick(item: ITrashItem, index: number, e: MouseEvent) {
-    if (e.shiftKey && this._lastClickedIndex >= 0) {
-      // Shift+click: range select from last clicked to current
-      const start = Math.min(this._lastClickedIndex, index);
-      const end = Math.max(this._lastClickedIndex, index);
+    // A click makes its row the active row, so the keyboard continues from it
+    this._activePath = item.trash_path;
+    this._renderActiveRow();
+    // Resolve the anchor by path: a sort change reorders the rows between clicks
+    const anchorIndex =
+      this._lastClickedAnchor === null
+        ? -1
+        : this._sortedItems.findIndex(
+            row => row.trash_path === this._lastClickedAnchor
+          );
+    if (e.shiftKey && anchorIndex >= 0) {
+      // Shift+click: range select from the anchor to the current row
+      const start = Math.min(anchorIndex, index);
+      const end = Math.max(anchorIndex, index);
 
       if (!e.ctrlKey && !e.metaKey) {
         this._clearSelection();
@@ -483,7 +616,7 @@ export class TrashWidget extends Widget {
       for (let i = start; i <= end; i++) {
         this._selectItem(this._sortedItems[i]);
       }
-      // Don't update _lastClickedIndex on shift+click to allow extending range
+      // Don't update the anchor on shift+click to allow extending range
     } else if (e.ctrlKey || e.metaKey) {
       // Ctrl+click: toggle individual item
       if (this._selectedItems.has(item)) {
@@ -491,18 +624,23 @@ export class TrashWidget extends Widget {
       } else {
         this._selectItem(item);
       }
-      this._lastClickedIndex = index;
+      this._lastClickedAnchor = item.trash_path;
     } else {
       // Normal click: select only this item
       this._clearSelection();
       this._selectItem(item);
-      this._lastClickedIndex = index;
+      this._lastClickedAnchor = item.trash_path;
     }
   }
 
   private _createItemElement(item: ITrashItem): HTMLDivElement {
     const itemEl = document.createElement('div');
     itemEl.className = 'jp-TrashPanel-item';
+    // An id derived from the path is stable across every render, so
+    // aria-activedescendant keeps naming the same row after a reload.
+    itemEl.id = this._rowId(item);
+    itemEl.setAttribute('role', 'option');
+    itemEl.setAttribute('aria-selected', String(this._selectedItems.has(item)));
     if (this._selectedItems.has(item)) {
       itemEl.classList.add('jp-mod-selected');
     }
@@ -575,14 +713,153 @@ export class TrashWidget extends Widget {
       if (!this._selectedItems.has(item)) {
         this._clearSelection();
         this._selectItem(item);
-        this._lastClickedIndex = this._sortedItems.indexOf(item);
+        this._lastClickedAnchor = item.trash_path;
       }
 
       this.node.classList.add('jp-mod-contextMenuOpen');
+      this._menuOpenedByKeyboard = false;
       this._contextMenu.open(e.clientX, e.clientY);
     });
 
     return itemEl;
+  }
+
+  private _rowId(item: ITrashItem): string {
+    // Code units, not code points: astral characters must keep distinct ids.
+    const units = item.trash_path
+      .split('')
+      .map(c => c.charCodeAt(0).toString(36))
+      .join('-');
+    return `jp-trash-row-${units}`;
+  }
+
+  /**
+   * The keyboard model of the list: arrows move the active row, Space
+   * toggles its selection, Enter opens it and the menu keys show its menu.
+   */
+  private _handleListKeyDown(e: KeyboardEvent): void {
+    const index = this._sortedItems.findIndex(
+      item => item.trash_path === this._activePath
+    );
+    switch (e.key) {
+      case 'ArrowDown':
+        this._setActiveIndex(index < 0 ? 0 : index + 1);
+        break;
+      case 'ArrowUp':
+        this._setActiveIndex(
+          index < 0 ? this._sortedItems.length - 1 : index - 1
+        );
+        break;
+      case 'Home':
+        this._setActiveIndex(0);
+        break;
+      case 'End':
+        this._setActiveIndex(this._sortedItems.length - 1);
+        break;
+      case ' ':
+        if (index < 0) {
+          return;
+        }
+        this._toggleSelection(this._sortedItems[index]);
+        break;
+      case 'Enter':
+        if (index < 0) {
+          return;
+        }
+        this._openItem(this._sortedItems[index]);
+        break;
+      case 'F10':
+        if (!e.shiftKey || index < 0) {
+          return;
+        }
+        this._openContextMenuAt(this._sortedItems[index]);
+        break;
+      case 'ContextMenu':
+        if (index < 0) {
+          return;
+        }
+        this._openContextMenuAt(this._sortedItems[index]);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  private _setActiveIndex(index: number): void {
+    if (this._sortedItems.length === 0) {
+      return;
+    }
+    const clamped = Math.max(0, Math.min(index, this._sortedItems.length - 1));
+    this._activePath = this._sortedItems[clamped].trash_path;
+    this._renderActiveRow();
+    this._itemElements
+      .get(this._sortedItems[clamped])
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  /**
+   * Repaint the active row after a render: a path the new list does not hold
+   * is dropped, otherwise the row is marked active.
+   */
+  private _restoreActiveRow(): void {
+    if (
+      this._activePath !== null &&
+      !this._sortedItems.some(row => row.trash_path === this._activePath)
+    ) {
+      this._activePath = null;
+    }
+    this._renderActiveRow();
+  }
+
+  private _renderActiveRow(): void {
+    for (const el of this._itemElements.values()) {
+      el.classList.remove('jp-mod-active');
+    }
+    const item = this._sortedItems.find(
+      row => row.trash_path === this._activePath
+    );
+    const el = item === undefined ? undefined : this._itemElements.get(item);
+    if (el === undefined) {
+      this._list.removeAttribute('aria-activedescendant');
+      return;
+    }
+    el.classList.add('jp-mod-active');
+    this._list.setAttribute('aria-activedescendant', el.id);
+  }
+
+  private _toggleSelection(item: ITrashItem): void {
+    if (this._selectedItems.has(item)) {
+      this._deselectItem(item);
+    } else {
+      this._selectItem(item);
+    }
+    this._lastClickedAnchor = item.trash_path;
+  }
+
+  /** Enter on an active row does what a double-click does. */
+  private _openItem(item: ITrashItem): void {
+    if (item.is_dir && !item.is_symlink) {
+      this._navigate(item.trash_path.split('/'));
+    }
+  }
+
+  /** The menu keys open the row menu where the mouse would open it. */
+  private _openContextMenuAt(item: ITrashItem): void {
+    if (!this._selectedItems.has(item)) {
+      this._clearSelection();
+      this._selectItem(item);
+      this._lastClickedAnchor = item.trash_path;
+    }
+    const el = this._itemElements.get(item);
+    if (el === undefined) {
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    this.node.classList.add('jp-mod-contextMenuOpen');
+    this._menuOpenedByKeyboard = true;
+    this._contextMenu.open(rect.left + 8, rect.bottom);
   }
 
   private _formatRelativeTime(isoDate: string): string {

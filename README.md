@@ -21,6 +21,9 @@ A dedicated left panel for managing your JupyterLab trash. See what's taking up 
 - **Storage usage display** - See how much space deleted files occupy
 - **Individual item management** - Remove or restore specific files from trash
 - **Folder navigation** - Open a trashed folder and restore or remove single items inside it
+- **Keyboard control** - Tab to the list, move with the arrow keys, select with Space, open a folder with Enter and reach Restore and Delete with Shift+F10
+- **Reduced-motion control** - The panel names the system's reduced-motion setting and offers a `force motion` toggle, so the spinner still shows activity when you want it
+- **Large trash** - Emptying tens of thousands of items no longer blocks the rest of the lab
 - **Empty bin** - Clear all deleted files at once
 - **Server-side integration** - Python backend for reliable trash operations
 
