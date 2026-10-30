@@ -2,6 +2,18 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.16] - 2026-10-30
+
+### Changed
+
+- Panel labels, titles, the list's `aria-label` and the delete and empty dialogs are read from the translation bundle, and the four panel commands declare their arguments with `describedBy`
+- `@jupyterlab/translation` is a direct dependency at the version the lock already resolves
+
+### Fixed
+
+- The Build workflow's integration test no longer fails when other browser specs add items to the shared trash while the performance spec waits for its seeded count
+- The source produces no ESLint warnings; the 23 warnings are cleared
+
 ## [1.1.15] - 2026-10-30
 
 ### Changed
