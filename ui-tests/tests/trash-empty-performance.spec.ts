@@ -64,8 +64,19 @@ test('Empty Trash does not freeze the server', async ({ page }) => {
   await tab.waitFor({ state: 'visible', timeout: 60_000 });
   await tab.click();
 
-  const summary = page.locator('#jp-trash-panel .jp-TrashPanel-summary');
-  await expect(summary).toContainText('4000 items', { timeout: 60_000 });
+  // Other spec files delete their temporary files into the same trash while
+  // this test waits, so only the lower bound is stable.
+  await page.waitForFunction(
+    (expected: number) => {
+      const el = document.querySelector(
+        '#jp-trash-panel .jp-TrashPanel-summary'
+      );
+      const match = /(\d+) items/.exec(el?.textContent ?? '');
+      return match ? Number(match[1]) >= expected : false;
+    },
+    FOLDER_COUNT + SINGLE_COUNT,
+    { timeout: 120_000 }
+  );
 
   // 50 ms ping loop; it records the latency of every /api/status round trip.
   await page.evaluate(() => {

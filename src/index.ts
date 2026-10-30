@@ -4,8 +4,13 @@ import {
   JupyterFrontEndPlugin
 } from '@jupyterlab/application';
 
+import { nullTranslator } from '@jupyterlab/translation';
+
 import { isTrashEnabled } from './request';
+// eslint-disable-next-line jupyter/prefer-lazy-imports -- the panel widget is created in activate(); it is the extension's purpose
 import { TrashWidget } from './widget';
+
+const trans = nullTranslator.load('jupyterlab_trash_mgmt_extension');
 
 /**
  * Command IDs for trash management.
@@ -49,8 +54,9 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
     // Register refresh command
     commands.addCommand(CommandIDs.refresh, {
-      label: 'Refresh Trash',
-      caption: 'Refresh the trash panel contents',
+      label: trans.__('Refresh Trash'),
+      caption: trans.__('Refresh the trash panel contents'),
+      describedBy: { args: { type: 'object', properties: {} } },
       execute: () => {
         widget.refresh();
       }
@@ -58,8 +64,9 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
     // Register empty command
     commands.addCommand(CommandIDs.empty, {
-      label: 'Empty Trash',
-      caption: 'Permanently delete all items in trash',
+      label: trans.__('Empty Trash'),
+      caption: trans.__('Permanently delete all items in trash'),
+      describedBy: { args: { type: 'object', properties: {} } },
       execute: () => {
         // The widget handles the confirmation dialog internally
         (widget as any)._emptyTrash();

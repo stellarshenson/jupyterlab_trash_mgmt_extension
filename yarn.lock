@@ -7643,6 +7643,7 @@ __metadata:
     "@jupyterlab/coreutils": ^6.6.0
     "@jupyterlab/services": ^7.6.0
     "@jupyterlab/testutils": ^4.6.0
+    "@jupyterlab/translation": ^4.6.4
     "@jupyterlab/ui-components": ^4.6.0
     "@lumino/commands": ^2.3.0
     "@lumino/messaging": ^2.0.0

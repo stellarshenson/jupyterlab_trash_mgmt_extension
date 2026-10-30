@@ -1,11 +1,14 @@
 import { Widget } from '@lumino/widgets';
 import { showDialog, Dialog, showErrorMessage } from '@jupyterlab/apputils';
+import { nullTranslator } from '@jupyterlab/translation';
 import { Menu } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
 import { Message } from '@lumino/messaging';
 import { ServerConnection } from '@jupyterlab/services';
 import { requestAPI } from './request';
 import { trashIcon, folderIcon, fileIcon, refreshIcon } from './icon';
+
+const trans = nullTranslator.load('jupyterlab_trash_mgmt_extension');
 
 // Auto-refresh interval: 1/6 minute = 10 seconds
 const REFRESH_INTERVAL_MS = 10000;
@@ -74,7 +77,7 @@ export class TrashWidget extends Widget {
     this._serverSettings = serverSettings;
     this.id = 'jp-trash-panel';
     this.title.icon = trashIcon;
-    this.title.caption = 'Trash';
+    this.title.caption = trans.__('Trash');
     this.addClass('jp-TrashPanel');
 
     // Set up commands for context menu
@@ -102,13 +105,13 @@ export class TrashWidget extends Widget {
 
     const title = document.createElement('span');
     title.className = 'jp-TrashPanel-title';
-    title.textContent = 'Trash Management';
+    title.textContent = trans.__('Trash Management');
     this._header.appendChild(title);
 
     this._emptyBtn = document.createElement('button');
     this._emptyBtn.className =
       'jp-TrashPanel-header-button jp-TrashPanel-header-button-danger';
-    this._emptyBtn.title = 'Empty Trash';
+    this._emptyBtn.title = trans.__('Empty Trash');
     this._emptyBtn.hidden = true;
     trashIcon.element({ container: this._emptyBtn });
     this._emptyBtn.addEventListener('click', () => this._emptyTrash());
@@ -117,7 +120,7 @@ export class TrashWidget extends Widget {
     // Refresh is appended last, so it is the rightmost icon
     this._refreshBtn = document.createElement('button');
     this._refreshBtn.className = 'jp-TrashPanel-header-button';
-    this._refreshBtn.title = 'Refresh';
+    this._refreshBtn.title = trans.__('Refresh');
     refreshIcon.element({ container: this._refreshBtn });
     this._refreshBtn.addEventListener('click', () => this.refresh());
     this._header.appendChild(this._refreshBtn);
@@ -151,7 +154,7 @@ export class TrashWidget extends Widget {
     this._list.tabIndex = 0;
     this._list.setAttribute('role', 'listbox');
     this._list.setAttribute('aria-multiselectable', 'true');
-    this._list.setAttribute('aria-label', 'Trash items');
+    this._list.setAttribute('aria-label', trans.__('Trash items'));
     this._list.addEventListener('keydown', (e: KeyboardEvent) =>
       this._handleListKeyDown(e)
     );
@@ -160,7 +163,7 @@ export class TrashWidget extends Widget {
     // Create empty message
     this._emptyMessage = document.createElement('div');
     this._emptyMessage.className = 'jp-TrashPanel-empty';
-    this._emptyMessage.textContent = 'Trash is empty';
+    this._emptyMessage.textContent = trans.__('Trash is empty');
     this._emptyMessage.style.display = 'none';
     this.node.appendChild(this._emptyMessage);
 
@@ -184,6 +187,7 @@ export class TrashWidget extends Widget {
 
   private _setupCommands(): void {
     this._commands.addCommand('trash:restore', {
+      describedBy: { args: { type: 'object', properties: {} } },
       label: () => {
         const count = this._selectedItems.size;
         return count > 1 ? `Restore ${count} Items` : 'Restore';
@@ -196,6 +200,7 @@ export class TrashWidget extends Widget {
     });
 
     this._commands.addCommand('trash:delete', {
+      describedBy: { args: { type: 'object', properties: {} } },
       label: () => {
         const count = this._selectedItems.size;
         return count > 1
@@ -483,7 +488,9 @@ export class TrashWidget extends Widget {
 
     if (this._items.length === 0) {
       this._emptyMessage.textContent =
-        this._path.length > 0 ? 'Folder is empty' : 'Trash is empty';
+        this._path.length > 0
+          ? trans.__('Folder is empty')
+          : trans.__('Trash is empty');
       this._emptyMessage.style.display = 'flex';
       this._columnHeader.style.display = 'none';
       // A hidden element cannot hold the focus; hand it to the header
@@ -890,9 +897,12 @@ export class TrashWidget extends Widget {
         : `Are you sure you want to permanently delete ${count} items? This cannot be undone.`;
 
     const result = await showDialog({
-      title: 'Delete Permanently',
+      title: trans.__('Delete Permanently'),
       body,
-      buttons: [Dialog.cancelButton(), Dialog.warnButton({ label: 'Delete' })]
+      buttons: [
+        Dialog.cancelButton(),
+        Dialog.warnButton({ label: trans.__('Delete') })
+      ]
     });
 
     if (result.button.accept) {
@@ -925,11 +935,13 @@ export class TrashWidget extends Widget {
 
   private async _emptyTrash(): Promise<void> {
     const result = await showDialog({
-      title: 'Empty Trash',
-      body: 'Are you sure you want to permanently delete all items in the trash? This cannot be undone.',
+      title: trans.__('Empty Trash'),
+      body: trans.__(
+        'Are you sure you want to permanently delete all items in the trash? This cannot be undone.'
+      ),
       buttons: [
         Dialog.cancelButton(),
-        Dialog.warnButton({ label: 'Empty Trash' })
+        Dialog.warnButton({ label: trans.__('Empty Trash') })
       ]
     });
 
