@@ -170,11 +170,13 @@ pytest and jest suites of the extension
   - test-tags: UNIT
   - log: 2026-10-13T21:21:57Z @kj added
   - log: 2026-10-13T23:27:15Z @kj closed
-- [ ] `DEF-TEST-23-PERF-COUNT` **Build fails: perf spec waits for an exact trash count** - MAJOR; the Integration tests job fails on every push because trash-empty-performance.spec.ts waits for the exact summary text '4000 items', while other spec files delete their temporary files into the same trash and the panel reads 4003
+- [x] `DEF-TEST-23-PERF-COUNT` **Build fails: perf spec waits for an exact trash count** - MAJOR; the Integration tests job fails on every push because trash-empty-performance.spec.ts waits for the exact summary text '4000 items', while other spec files delete their temporary files into the same trash and the panel reads 4003
+  - evidence: Build 41032946681 success and Check Release 41032946674 success on c3efb0a; local Galata 4/4 on the fixed spec (EMPTY_POST_MS=3819, PING_MAX_MS=12.3)
   - repro: push to main; Build workflow Integration tests job fails at ui-tests/tests/trash-empty-performance.spec.ts:68 with Received string '4003 items · 48.8 KB' against Expected substring '4000 items'
   - test-tags: E2E
   - root-cause: 2026-10-30T09:16:49Z @kj the spec asserts an exact count on a trash other spec files mutate concurrently; the seeded 4000 entries are only a lower bound
   - log: 2026-10-30T09:16:49Z @kj added
+  - log: 2026-10-30T09:26:20Z @kj closed
 
 ## Distribution `DIST`
 
