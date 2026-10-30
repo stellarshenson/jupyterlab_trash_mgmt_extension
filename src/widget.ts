@@ -68,12 +68,6 @@ export class TrashWidget extends Widget {
   private _loadSeq = 0;
   // Refreshes that currently keep the refresh icon turning
   private _spinCount = 0;
-  // Force-motion override, on by default: the spinners keep turning under a
-  // reduced-motion preference until the user turns it off.
-  private _forceMotion = true;
-  private _motionQuery: MediaQueryList | null = null;
-  private _motionChip: HTMLSpanElement | null = null;
-  private _forceMotionBtn: HTMLButtonElement | null = null;
 
   constructor(serverSettings: ServerConnection.ISettings) {
     super();
@@ -131,25 +125,13 @@ export class TrashWidget extends Widget {
     this.node.appendChild(this._header);
 
     // Create summary bar: item count and total size of the listed location.
-    // The bar wraps, so both readouts stay visible beside the motion controls.
+    // The bar wraps, so both readouts stay visible.
     this._summary = document.createElement('div');
     this._summary.className = 'jp-TrashPanel-summary';
     this._summaryText = document.createElement('span');
     this._summaryText.className = 'jp-TrashPanel-summaryText';
     this._summary.appendChild(this._summaryText);
     this.node.appendChild(this._summary);
-
-    // Under a reduced-motion preference the bar names the setting and offers
-    // the override. A platform without matchMedia reports no preference.
-    this.node.classList.toggle('jp-mod-force-motion', this._forceMotion);
-    this._motionQuery =
-      typeof window.matchMedia === 'function'
-        ? window.matchMedia('(prefers-reduced-motion: reduce)')
-        : null;
-    this._motionQuery?.addEventListener('change', () =>
-      this._renderMotionControls()
-    );
-    this._renderMotionControls();
 
     // Create breadcrumb row: shown only inside a folder
     this._breadcrumb = document.createElement('div');
@@ -358,43 +340,6 @@ export class TrashWidget extends Widget {
     this._summaryText.textContent = `${count} ${noun} \u00B7 ${data.total_size_formatted}`;
     // Inside a folder the trash holds at least that folder
     this._emptyBtn.hidden = this._path.length === 0 && count === 0;
-  }
-
-  /**
-   * Show the reduced-motion chip and the override button while the system
-   * reports the preference, and take both out of the bar when it clears.
-   */
-  private _renderMotionControls(): void {
-    if (this._motionQuery?.matches !== true) {
-      this._motionChip?.remove();
-      this._forceMotionBtn?.remove();
-      this._motionChip = null;
-      this._forceMotionBtn = null;
-      return;
-    }
-    if (this._motionChip === null) {
-      this._motionChip = document.createElement('span');
-      this._motionChip.className = 'jp-TrashPanel-motionChip';
-      this._motionChip.textContent = 'reduced motion';
-
-      this._forceMotionBtn = document.createElement('button');
-      this._forceMotionBtn.className = 'jp-TrashPanel-forceMotion';
-      this._forceMotionBtn.textContent = 'force motion';
-      this._forceMotionBtn.addEventListener('click', () =>
-        this._setForceMotion(!this._forceMotion)
-      );
-      this._summary.append(this._motionChip, this._forceMotionBtn);
-    }
-    this._forceMotionBtn!.setAttribute(
-      'aria-pressed',
-      String(this._forceMotion)
-    );
-  }
-
-  private _setForceMotion(on: boolean): void {
-    this._forceMotion = on;
-    this.node.classList.toggle('jp-mod-force-motion', on);
-    this._forceMotionBtn?.setAttribute('aria-pressed', String(on));
   }
 
   /**

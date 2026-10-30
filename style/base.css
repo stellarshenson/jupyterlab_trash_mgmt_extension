@@ -77,11 +77,9 @@
   display: none;
 }
 
-/* Summary bar: item count and total size of the listed location. The bar
-   wraps, so both readouts stay visible beside the reduced-motion controls. */
+/* Summary bar: item count and total size of the listed location. */
 .jp-TrashPanel-summary {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   flex-shrink: 0;
   min-height: 16px;
@@ -102,30 +100,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Reduced-motion chip and its override toggle, inside the summary bar. The
-   bar upper-cases its text; the controls read as labels and buttons. */
-.jp-TrashPanel-motionChip,
-.jp-TrashPanel-forceMotion {
-  flex: 0 0 auto;
-  margin-left: 8px;
-  font: inherit;
-  letter-spacing: normal;
-  text-transform: none;
-}
-
-.jp-TrashPanel-forceMotion {
-  padding: 0 4px;
-  border: 1px solid var(--jp-border-color2);
-  border-radius: 2px;
-  background: transparent;
-  color: var(--jp-ui-font-color1);
-  cursor: pointer;
-}
-
-.jp-TrashPanel-forceMotion[aria-pressed='true'] {
-  border-color: var(--jp-brand-color1);
 }
 
 /* Breadcrumb row: shown only inside a folder. It wraps, so every segment of
@@ -375,21 +349,4 @@
   border-top-color: var(--jp-brand-color1);
   border-radius: 50%;
   animation: jp-trash-panel-spin 0.7s linear infinite;
-}
-
-/* Under a reduced-motion preference the spinners keep turning: the rotation
-   is the whole busy signal, so only the opacity drops. Force motion off
-   returns the animations to the system and stops them. */
-@media (prefers-reduced-motion: reduce) {
-  .jp-TrashPanel-header-button.jp-mod-spinning svg,
-  .jp-TrashPanel-loadingSpinner {
-    opacity: 0.5;
-  }
-
-  .jp-TrashPanel:not(.jp-mod-force-motion)
-    .jp-TrashPanel-header-button.jp-mod-spinning
-    svg,
-  .jp-TrashPanel:not(.jp-mod-force-motion) .jp-TrashPanel-loadingSpinner {
-    animation: none;
-  }
 }

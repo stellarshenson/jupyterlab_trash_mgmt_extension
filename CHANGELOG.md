@@ -2,6 +2,15 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.15] - 2026-10-30
+
+### Changed
+
+- Motion always runs: the `reduced motion` chip, the `force motion` toggle and the `prefers-reduced-motion` styles are removed, so the refresh icon and the loading ring turn under every system preference
+- The summary bar drops the wrap rule that only the removed controls needed
+- The README shows a full-screen, high-resolution screenshot of the panel with eight items in the trash
+- The unit and Galata specs assert that no motion control is rendered and that both spinner animations keep `jp-trash-panel-spin`
+
 ## [1.1.14] - 2026-10-29
 
 ### Added

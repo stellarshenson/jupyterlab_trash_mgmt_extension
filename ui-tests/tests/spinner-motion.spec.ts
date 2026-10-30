@@ -2,10 +2,8 @@ import { expect, test } from '@jupyterlab/galata';
 import type { IJupyterLabPageFixture } from '@jupyterlab/galata';
 
 /**
- * ACC-MOTION-58-SPIN: both spinner animations keep rotating while the system
- * prefers reduced motion. The rotation is the whole busy signal, so the
- * reduced-motion rule dims the spinners but must not stop them until force
- * motion is turned off.
+ * ACC-MOTION-58-SPIN: both spinners keep animation-name jp-trash-panel-spin
+ * under every system preference, and the panel renders no motion control.
  */
 
 const TAB = 'li.lm-TabBar-tab[data-id="jp-trash-panel"]';
@@ -85,34 +83,15 @@ test.describe('prefers-reduced-motion: reduce', () => {
     page
   }) => {
     await expectSpinning(page, true);
-  });
-
-  test('force motion off stops both spinners and keeps the chip', async ({
-    page
-  }) => {
-    await openPanel(page);
-    const chip = page.locator('#jp-trash-panel .jp-TrashPanel-motionChip');
-    const toggle = page.locator('#jp-trash-panel .jp-TrashPanel-forceMotion');
-    await expect(chip).toHaveText('reduced motion');
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
-    const pressedBorder = await toggle.evaluate(
-      (el: HTMLElement) => getComputedStyle(el).borderTopColor
-    );
-
-    await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-    const unpressedBorder = await toggle.evaluate(
-      (el: HTMLElement) => getComputedStyle(el).borderTopColor
-    );
-    expect(pressedBorder).not.toBe(unpressedBorder);
-
-    const { header, loading } = await spinAndRead(page);
-    console.log(
-      `FORCE_MOTION=off HEADER_ANIMATION=${header} LOADING_ANIMATION=${loading}`
-    );
-    expect(header).toBe('none');
-    expect(loading).toBe('none');
-    await expect(chip).toBeVisible();
+    await expect(
+      page.locator('#jp-trash-panel .jp-TrashPanel-motionChip')
+    ).toHaveCount(0);
+    await expect(
+      page.locator('#jp-trash-panel .jp-TrashPanel-forceMotion')
+    ).toHaveCount(0);
+    await expect(
+      page.locator('#jp-trash-panel.jp-mod-force-motion')
+    ).toHaveCount(0);
   });
 });
 

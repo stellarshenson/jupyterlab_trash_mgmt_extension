@@ -186,23 +186,11 @@ function press(
   );
 }
 
-/** Install a controllable `prefers-reduced-motion` query on the window. */
-function mockReducedMotion(matches: boolean) {
-  const listeners: Array<() => void> = [];
-  const query = {
-    matches,
-    addEventListener: (_type: string, listener: () => void) =>
-      listeners.push(listener)
-  };
-  window.matchMedia = jest.fn(
-    () => query
-  ) as unknown as typeof window.matchMedia;
-  return {
-    set(next: boolean) {
-      query.matches = next;
-      listeners.forEach(listener => listener());
-    }
-  };
+/** Install a static `prefers-reduced-motion` query on the window. */
+function mockReducedMotion(matches: boolean): void {
+  window.matchMedia = jest.fn(() => ({
+    matches
+  })) as unknown as typeof window.matchMedia;
 }
 
 const listBox = (widget: TrashWidget) =>
@@ -325,57 +313,23 @@ describe('summary bar', () => {
 });
 
 describe('reduced motion', () => {
-  const chip = (widget: TrashWidget) =>
-    widget.node.querySelector<HTMLElement>('.jp-TrashPanel-motionChip');
-  const forceButton = (widget: TrashWidget) =>
-    widget.node.querySelector<HTMLButtonElement>('.jp-TrashPanel-forceMotion');
-
-  it('names the setting and offers the override under reduce', async () => {
-    mockReducedMotion(true);
-    const widget = await open({ list: listOf([]) });
-    expect(chip(widget)?.textContent).toBe('reduced motion');
-    expect(forceButton(widget)?.textContent).toBe('force motion');
-    expect(forceButton(widget)?.getAttribute('aria-pressed')).toBe('true');
-    expect(widget.node.classList).toContain('jp-mod-force-motion');
-  });
-
-  it('turns the override off and back on from the button', async () => {
-    mockReducedMotion(true);
-    const widget = await open({ list: listOf([]) });
-    const button = forceButton(widget)!;
-
-    click(button);
+  /** The panel holds no chip, no toggle and no override class. */
+  function expectNoMotionControl(widget: TrashWidget): void {
+    expect(widget.node.querySelector('.jp-TrashPanel-motionChip')).toBeNull();
+    expect(widget.node.querySelector('.jp-TrashPanel-forceMotion')).toBeNull();
     expect(widget.node.classList).not.toContain('jp-mod-force-motion');
-    expect(button.getAttribute('aria-pressed')).toBe('false');
+  }
 
-    click(button);
-    expect(widget.node.classList).toContain('jp-mod-force-motion');
-    expect(button.getAttribute('aria-pressed')).toBe('true');
+  it('renders no motion control under a reduce preference', async () => {
+    mockReducedMotion(true);
+    const widget = await open({ list: listOf([]) });
+    expectNoMotionControl(widget);
   });
 
-  it('renders no control when reduce does not match', async () => {
+  it('renders no motion control without a reduce preference', async () => {
     mockReducedMotion(false);
     const widget = await open({ list: listOf([]) });
-    expect(chip(widget)).toBeNull();
-    expect(forceButton(widget)).toBeNull();
-  });
-
-  it('adds and drops the controls as the media query changes', async () => {
-    const motion = mockReducedMotion(false);
-    const widget = await open({ list: listOf([]) });
-    expect(chip(widget)).toBeNull();
-
-    motion.set(true);
-    expect(chip(widget)?.textContent).toBe('reduced motion');
-    expect(forceButton(widget)?.getAttribute('aria-pressed')).toBe('true');
-
-    motion.set(false);
-    expect(chip(widget)).toBeNull();
-    expect(forceButton(widget)).toBeNull();
-
-    motion.set(true);
-    expect(chip(widget)?.textContent).toBe('reduced motion');
-    expect(forceButton(widget)?.getAttribute('aria-pressed')).toBe('true');
+    expectNoMotionControl(widget);
   });
 });
 

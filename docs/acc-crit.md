@@ -388,12 +388,19 @@ Rotation of the refresh icon and of the loading spinner
   - log: 2026-10-22T17:55:53Z @kj added
   - log: 2026-10-28T20:40:14Z @kj CSS fix: prefers-reduced-motion block no longer sets animation: none; base animation rules unchanged; check-spinner-css.py passes, lint:check 0 errors; browser check waits for a rebuild of the installed extension; criterion left open
   - log: 2026-10-28T21:08:02Z @kj closed
-- [x] `ACC-MOTION-64-FORCE-MOTION` **Reduced-motion state is named and overridable** - MEDIUM; the panel names the reduced-motion state and offers a force-motion control
-  - evidence: jest reduced motion cases 'names the setting and offers the override under reduce', 'turns the override off and back on from the button', 'renders no control when reduce does not match', 'adds and drops the controls as the media query changes' pass; Galata spinner-motion 'force motion off stops both spinners and keeps the chip' passes; jest 66 passed, pytest 73 passed, Galata 5/5
+- [-] `ACC-MOTION-64-FORCE-MOTION` **Reduced-motion state is named and overridable** - MEDIUM; the panel names the reduced-motion state and offers a force-motion control
   - test: Galata spinner-motion.spec.ts cases 'both spinners keep animation-name jp-trash-panel-spin' (reduce and no-preference) and 'force motion off stops both spinners and keeps the chip'; jest reduced motion cases 'names the setting and offers the override under reduce', 'turns the override off and back on from the button', 'renders no control when reduce does not match', 'adds and drops the controls as the media query changes'
   - test-tags: E2E, UNIT
   - log: 2026-10-28T22:21:17Z @kj added; reason: the test hint must name every Galata and jest case covering the criterion
   - log: 2026-10-28T22:26:41Z @kj closed; reason: the evidence quotes the four jest case names and the Galata case name verbatim
+  - log: 2026-10-30T08:18:53Z @kj rejected: rejected; evidence retired: jest reduced motion cases 'names the setting and offers the override under reduce', 'turns the override off and back on from the button', 'renders no control when reduce does not match', 'adds and drops the controls as the media query changes' pass; Galata spinner-motion 'force motion off stops both spinners and keeps the chip' passes; jest 66 passed, pytest 73 passed, Galata 5/5; reason: owner decision 2026-10-30: the motion controls are unnecessary; motion always runs and no control is rendered
+- [x] `ACC-MOTION-65-NO-CONTROL` **No motion control is rendered** - MEDIUM; the panel renders no reduced-motion chip and no force-motion toggle; both spinner animations keep rotating under every system preference
+  - evidence: jest 66 passed, 66 total, 1 suite passed (verify.json, exit 0); Galata 'prefers-reduced-motion: reduce > both spinners keep animation-name jp-trash-panel-spin' passed (4.0s) and 'prefers-reduced-motion: no-preference > both spinners keep animation-name jp-trash-panel-spin' passed (3.9s), 2 passed (14.0s), exit 0
+  - related: ACC-MOTION-64-FORCE-MOTION
+  - test: jest widget.spec.ts 'renders no motion control under a reduce preference', 'renders no motion control without a reduce preference'; Galata spinner-motion.spec.ts 'prefers-reduced-motion: reduce > both spinners keep animation-name jp-trash-panel-spin', 'prefers-reduced-motion: no-preference > both spinners keep animation-name jp-trash-panel-spin'
+  - test-tags: UNIT, E2E
+  - log: 2026-10-30T08:18:48Z @kj added
+  - log: 2026-10-30T08:18:59Z @kj closed
 
 ## Keyboard `KEYS`
 
