@@ -31,7 +31,7 @@ JupyterLab extension for trash/bin management. Provides a dedicated left panel (
 
 **Package Names**:
 
-- npm: `jupyterlab_trash_mgmt_extension`
+- npm: `@stellarshenson/jupyterlab-trash-mgmt-extension`
 - PyPI: `jupyterlab-trash-mgmt-extension`
 - GitHub repo: `stellarshenson/jupyterlab_trash_mgmt_extension`
 

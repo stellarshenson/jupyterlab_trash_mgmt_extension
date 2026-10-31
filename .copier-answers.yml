@@ -14,6 +14,6 @@ project_short_description: Jupyterlab extension to introduce new left panel (alo
     empty bin, remove item from trash, restore item and show how much space items
     in the trash take
 python_name: jupyterlab_trash_mgmt_extension
-repository: ''
+repository: https://github.com/stellarshenson/jupyterlab_trash_mgmt_extension
 test: true
 
