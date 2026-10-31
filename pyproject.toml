@@ -61,8 +61,8 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel.shared-data]
-"jupyterlab_trash_mgmt_extension/labextension" = "share/jupyter/labextensions/jupyterlab_trash_mgmt_extension"
-"install.json" = "share/jupyter/labextensions/jupyterlab_trash_mgmt_extension/install.json"
+"jupyterlab_trash_mgmt_extension/labextension" = "share/jupyter/labextensions/@stellarshenson/jupyterlab-trash-mgmt-extension"
+"install.json" = "share/jupyter/labextensions/@stellarshenson/jupyterlab-trash-mgmt-extension/install.json"
 "jupyter-config/server-config" = "etc/jupyter/jupyter_server_config.d"
 
 [tool.hatch.build.hooks.version]

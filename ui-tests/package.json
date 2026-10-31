@@ -1,7 +1,7 @@
 {
-  "name": "jupyterlab_trash_mgmt_extension-ui-tests",
+  "name": "@stellarshenson/jupyterlab-trash-mgmt-extension-ui-tests",
   "version": "1.0.0",
-  "description": "JupyterLab jupyterlab_trash_mgmt_extension Integration Tests",
+  "description": "JupyterLab @stellarshenson/jupyterlab-trash-mgmt-extension Integration Tests",
   "private": true,
   "scripts": {
     "start": "jupyter lab --config jupyter_server_test_config.py",

@@ -21,17 +21,17 @@ namespace CommandIDs {
 }
 
 /**
- * Initialization data for the jupyterlab_trash_mgmt_extension extension.
+ * Initialization data for the @stellarshenson/jupyterlab-trash-mgmt-extension extension.
  */
 const plugin: JupyterFrontEndPlugin<void> = {
-  id: 'jupyterlab_trash_mgmt_extension:plugin',
+  id: '@stellarshenson/jupyterlab-trash-mgmt-extension:plugin',
   description:
     'JupyterLab extension for trash management with a dedicated sidebar panel',
   autoStart: true,
   requires: [ILabShell],
   activate: async (app: JupyterFrontEnd, labShell: ILabShell) => {
     console.log(
-      'JupyterLab extension jupyterlab_trash_mgmt_extension is activated!'
+      'JupyterLab extension @stellarshenson/jupyterlab-trash-mgmt-extension is activated!'
     );
 
     // Check if trash functionality is enabled on the server
