@@ -1,6 +1,6 @@
 {
     "name": "@stellarshenson/jupyterlab-trash-mgmt-extension",
-    "version": "1.1.19",
+    "version": "1.1.20",
     "description": "Jupyterlab extension to introduce new left panel (along with browser, kernels, git, extensions) to allow management of trash - that is, empty bin, remove item from trash, restore item and show how much space items in the trash take",
     "keywords": [
         "jupyter",
