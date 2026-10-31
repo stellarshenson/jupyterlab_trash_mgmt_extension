@@ -10,3 +10,4 @@ eslint.config.mjs
 tmp
 docs/acc-crit*.md
 docs/defects*.md
+.agents
