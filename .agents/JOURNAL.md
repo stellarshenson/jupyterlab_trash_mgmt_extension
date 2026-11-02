@@ -100,3 +100,6 @@ This journal tracks substantive work on documents, diagrams, and documentation c
 
 36. **Task - Release 1.1.22** (v1.1.22): Released the trash-source sections, the static refresh button and the review fixes<br>
     **Result**: The release carries the collapsible source sections below the XDG list with per-source counts and streaming, the `Clean All Sources` and `Clean Workspace` dialogs, the file-identity source dedupe, the static refresh button with its bounded busy mark, the repaired stale-load bookkeeping, the sections height cap and the busy-ring contrast, and the serial Galata suite. Gates before publish: jest 93, pytest 83, lint and tsc exit 0, Galata 10 of 10 with PING_MAX_MS 18.5. `CHANGELOG.md` gains `## [1.1.22]`; nine SCOPE criteria closed, 0 defects open. Version 1.1.21 to 1.1.22 comes from `increment_version` in `make publish`.
+
+37. **Task - Build lifecycle brought to Makefile 1.48** (v1.1.22): the canonical Makefile went to every extension on 2026-11-02<br>
+    **Result**: Makefile 1.48 verbatim; mrproper now removes tmp, logs, .venv, graphify-out, coverage and .pytest_cache; install and publish are .NOTPARALLEL; the cleaned tree carries the tag CHECKPOINT_JUPYTERLAB_4.6.5_UPGRADE_PORTED_1.1.22.
