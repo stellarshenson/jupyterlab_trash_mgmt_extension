@@ -1,5 +1,6 @@
 """Tests for trash management routes and helper functions."""
 
+import errno
 import json
 import os
 import shutil
@@ -9,8 +10,12 @@ from pathlib import Path
 
 import pytest
 
+from jupyterlab_trash_mgmt_extension import routes
 from jupyterlab_trash_mgmt_extension.routes import (
     clear_dir_sizes,
+    collect_sources,
+    delete_item,
+    empty_trash,
     format_size,
     get_dir_size,
     get_dir_size_cached,
@@ -19,6 +24,23 @@ from jupyterlab_trash_mgmt_extension.routes import (
     invalidate_dir_size,
     parse_trashinfo,
 )
+
+NAMESPACE = "jupyterlab-trash-mgmt-extension"
+
+
+def make_trash(root: Path) -> Path:
+    """Create a trash directory with its files and info folders."""
+    (root / "files").mkdir(parents=True)
+    (root / "info").mkdir()
+    return root
+
+
+def add_trash_item(trash: Path, name: str, original_path: str, content: str = "x") -> None:
+    """Add one top-level entry and its trashinfo to a trash directory."""
+    (trash / "files" / name).write_text(content)
+    (trash / "info" / f"{name}.trashinfo").write_text(
+        f"[Trash Info]\nPath={original_path}\nDeletionDate=2024-01-15T10:30:00\n"
+    )
 
 
 class TestHelperFunctions:
@@ -343,3 +365,241 @@ class TestTrashOperations:
         assert dir_item is not None
         assert dir_item["original_path"] == "/home/user/original/test_folder"
         assert dir_item["is_dir"] is True
+
+
+class TestRemoveTree:
+    """A directory refilled while rmtree walks it must not fail the whole empty."""
+
+    def test_empty_trash_retries_a_directory_not_empty(self, trash_dir, monkeypatch):
+        """The first ENOTEMPTY is retried, so the entry is still removed."""
+        folder = trash_dir / "files" / "refilled"
+        folder.mkdir()
+        (folder / "late.txt").write_text("x")
+
+        real_rmtree = shutil.rmtree
+        calls = []
+
+        def flaky_rmtree(path, *args, **kwargs):
+            calls.append(path)
+            if len(calls) == 1:
+                raise OSError(errno.ENOTEMPTY, "Directory not empty", str(path))
+            return real_rmtree(path, *args, **kwargs)
+
+        monkeypatch.setattr(routes.shutil, "rmtree", flaky_rmtree)
+
+        status, body = empty_trash()
+
+        assert status is None
+        assert body == {"success": True, "deleted_count": 1}
+        assert len(calls) == 2
+        assert not folder.exists()
+
+    def test_empty_trash_reports_a_persistent_directory_not_empty(
+        self, trash_dir, monkeypatch
+    ):
+        """A directory that stays refilled is reported after three attempts."""
+        folder = trash_dir / "files" / "busy"
+        folder.mkdir()
+
+        calls = []
+
+        def always_not_empty(path, *args, **kwargs):
+            calls.append(path)
+            raise OSError(errno.ENOTEMPTY, "Directory not empty", str(path))
+
+        monkeypatch.setattr(routes.shutil, "rmtree", always_not_empty)
+
+        status, body = empty_trash()
+
+        assert status is None
+        assert body["success"] is False
+        assert body["deleted_count"] == 0
+        assert len(calls) == 3
+        assert len(body["errors"]) == 1
+        assert body["errors"][0].startswith("busy: ")
+
+    def test_delete_retries_a_directory_not_empty(self, trash_dir, monkeypatch):
+        """The first ENOTEMPTY is retried, so the single item is still removed."""
+        folder = trash_dir / "files" / "refilled"
+        folder.mkdir()
+        (folder / "late.txt").write_text("x")
+
+        real_rmtree = shutil.rmtree
+        calls = []
+
+        def flaky_rmtree(path, *args, **kwargs):
+            calls.append(path)
+            if len(calls) == 1:
+                raise OSError(errno.ENOTEMPTY, "Directory not empty", str(path))
+            return real_rmtree(path, *args, **kwargs)
+
+        monkeypatch.setattr(routes.shutil, "rmtree", flaky_rmtree)
+
+        status, body = delete_item("refilled")
+
+        assert status is None
+        assert body == {"success": True}
+        assert len(calls) == 2
+        assert not folder.exists()
+
+
+class TestTrashSources:
+    """The source model: which sources exist and what each one reports."""
+
+    def test_absent_cache_is_not_a_source(self, trash_dir, tmp_path, monkeypatch):
+        """Without /home/cache only the XDG source is listed."""
+        homes = tmp_path / "homes"
+        homes.mkdir()
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        add_trash_item(trash_dir, "kept.txt", "/home/user/kept.txt", "12345")
+
+        sources = collect_sources()
+
+        assert [source["id"] for source in sources] == ["xdg"]
+        assert sources[0]["label"] == "Trash"
+        assert sources[0]["item_count"] == 1
+        assert sources[0]["total_size"] == "5 B"
+        assert sources[0]["error"] == ""
+
+    def test_home_trash_resolving_to_the_xdg_trash_is_listed_once(
+        self, tmp_path, monkeypatch
+    ):
+        """The current user's home trash is the XDG trash, so it is listed once."""
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        data_home = homes / "alice" / ".local" / "share"
+        monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+        make_trash(data_home / "Trash")
+
+        sources = routes.existing_sources()
+
+        assert [source["id"] for source in sources] == ["xdg"]
+
+    def test_home_trash_under_a_temporary_home_root_is_discovered(
+        self, trash_dir, tmp_path, monkeypatch
+    ):
+        """A home whose .local/share/Trash exists becomes a source."""
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        home_trash = make_trash(homes / "alice" / ".local" / "share" / "Trash")
+        add_trash_item(home_trash, "note.txt", "/home/alice/note.txt", "hello")
+
+        sources = collect_sources()
+
+        assert [source["id"] for source in sources] == ["xdg", "home:alice"]
+        assert sources[1]["label"] == "/home/alice"
+        assert sources[1]["item_count"] == 1
+        assert sources[1]["total_size"] == "5 B"
+
+
+class TestSourceListing:
+    """GET list names one source and defaults to the XDG trash."""
+
+    async def test_list_source_cache_and_default_xdg(
+        self, jp_fetch, trash_dir, tmp_path, monkeypatch
+    ):
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        cache = make_trash(homes / "cache")
+        add_trash_item(cache, "cached.bin", "/home/cache/cached.bin", "1234567890")
+        add_trash_item(trash_dir, "xdg.txt", "/home/user/xdg.txt", "abc")
+
+        response = await jp_fetch(NAMESPACE, "list", params={"source": "cache"})
+        data = json.loads(response.body)
+        assert [item["name"] for item in data["items"]] == ["cached.bin"]
+
+        response = await jp_fetch(NAMESPACE, "list")
+        data = json.loads(response.body)
+        assert [item["name"] for item in data["items"]] == ["xdg.txt"]
+
+        response = await jp_fetch(NAMESPACE, "sources")
+        sources = json.loads(response.body)
+        assert [source["id"] for source in sources] == ["xdg", "cache"]
+        assert sources[1]["item_count"] == 1
+        assert sources[1]["total_size"] == "10 B"
+
+
+class TestEmptyScopes:
+    """Empty keeps its single-trash default and adds all and workspace scopes."""
+
+    def test_scope_all_counts_each_source_and_survives_a_failure(
+        self, trash_dir, tmp_path, monkeypatch
+    ):
+        """A source that cannot be read is reported, and the next source is emptied."""
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        cache = make_trash(homes / "cache")
+        add_trash_item(cache, "cached.txt", "/home/cache/cached.txt", "abc")
+
+        # The XDG trash holds a plain file where its files folder belongs
+        (trash_dir / "files").rmdir()
+        (trash_dir / "files").write_text("not a directory")
+
+        status, body = empty_trash("all")
+
+        assert status is None
+        assert [source["id"] for source in body["sources"]] == ["xdg", "cache"]
+        by_id = {source["id"]: source for source in body["sources"]}
+        assert by_id["xdg"]["deleted_count"] == 0
+        assert by_id["xdg"]["errors"]
+        assert by_id["cache"]["deleted_count"] == 1
+        assert by_id["cache"]["errors"] == []
+        assert body["deleted_count"] == 1
+        assert body["success"] is False
+        assert not (cache / "files" / "cached.txt").exists()
+
+    def test_scope_workspace_removes_only_entries_under_the_root(
+        self, trash_dir, tmp_path, monkeypatch
+    ):
+        """Entries outside the root, including a prefix match, are left behind."""
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        workspace = tmp_path / "workspace"
+        add_trash_item(trash_dir, "inside.txt", str(workspace / "inside.txt"), "in")
+        add_trash_item(
+            trash_dir,
+            "outside.txt",
+            str(tmp_path / "workspace-other" / "outside.txt"),
+            "out",
+        )
+
+        cache = make_trash(homes / "cache")
+        add_trash_item(cache, "kept.txt", str(workspace / "kept.txt"), "keep")
+        add_trash_item(cache, "elsewhere.txt", str(tmp_path / "elsewhere.txt"), "else")
+
+        status, body = empty_trash("workspace", str(workspace))
+
+        assert status is None
+        assert [source["id"] for source in body["sources"]] == ["xdg", "cache"]
+        by_id = {source["id"]: source for source in body["sources"]}
+        assert by_id["xdg"]["deleted_count"] == 1
+        assert by_id["xdg"]["left_count"] == 1
+        assert by_id["cache"]["deleted_count"] == 1
+        assert by_id["cache"]["left_count"] == 1
+        assert body["deleted_count"] == 2
+        assert body["left_count"] == 2
+        assert body["success"] is True
+
+        assert sorted(p.name for p in (trash_dir / "files").iterdir()) == [
+            "outside.txt"
+        ]
+        assert not (trash_dir / "info" / "inside.txt.trashinfo").exists()
+        assert (trash_dir / "info" / "outside.txt.trashinfo").exists()
+        assert sorted(p.name for p in (cache / "files").iterdir()) == ["elsewhere.txt"]
+
+    def test_absent_scope_keeps_the_single_trash_behaviour(
+        self, trash_dir, tmp_path, monkeypatch
+    ):
+        """The default scope empties the XDG trash only and keeps the old response."""
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        cache = make_trash(homes / "cache")
+        add_trash_item(cache, "cached.txt", "/home/cache/cached.txt", "abc")
+        add_trash_item(trash_dir, "xdg.txt", "/home/user/xdg.txt", "x")
+
+        status, body = empty_trash()
+
+        assert status is None
+        assert body == {"success": True, "deleted_count": 1}
+        assert list((trash_dir / "files").iterdir()) == []
+        assert (cache / "files" / "cached.txt").exists()

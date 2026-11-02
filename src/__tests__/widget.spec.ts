@@ -3,6 +3,7 @@
  */
 
 import { ServerConnection } from '@jupyterlab/services';
+import { PageConfig } from '@jupyterlab/coreutils';
 import { showDialog, showErrorMessage } from '@jupyterlab/apputils';
 import { requestAPI } from '../request';
 import { TrashWidget } from '../widget';
@@ -90,9 +91,16 @@ function httpError(status: number) {
 
 type Route = unknown | (() => Promise<unknown>);
 
-/** Answer each end point from a table; an end point outside it fails the test. */
+/**
+ * Answer each end point from a table; an end point outside it fails the test.
+ * The source list defaults to empty, so a test that does not care about the
+ * extra sections still loads.
+ */
 function serve(routes: Record<string, Route>): Record<string, Route> {
   request.mockImplementation((endPoint: string) => {
+    if (endPoint === 'sources' && !(endPoint in routes)) {
+      return Promise.resolve([]);
+    }
     if (!(endPoint in routes)) {
       return Promise.reject(new Error(`unexpected request: ${endPoint}`));
     }
@@ -102,12 +110,14 @@ function serve(routes: Record<string, Route>): Record<string, Route> {
   return routes;
 }
 
-/** End points requested so far, oldest first. */
+/** End points requested so far, oldest first, without the source list. */
 function requested(): string[] {
-  return request.mock.calls.map(call => call[0]);
+  return request.mock.calls
+    .map(call => call[0])
+    .filter(endPoint => endPoint !== 'sources');
 }
 
-/** Let pending requests and the 500 ms refresh floor run out. */
+/** Let pending requests run out. */
 async function settle(): Promise<void> {
   await jest.advanceTimersByTimeAsync(600);
 }
@@ -218,11 +228,83 @@ async function openInsideA(): Promise<TrashWidget> {
   return widget;
 }
 
+const COLLAPSED_KEY =
+  '@stellarshenson/jupyterlab-trash-mgmt-extension:panel:collapsed';
+
+interface ISource {
+  id: string;
+  label: string;
+  item_count: number;
+  total_size: string;
+  error: string;
+}
+
+/** Build a `sources` response entry the way the server shapes it. */
+function sourceOf(
+  id: string,
+  itemCount = 0,
+  totalSize = '0 B',
+  error = ''
+): ISource {
+  const label =
+    id === 'xdg'
+      ? 'Trash'
+      : id === 'cache'
+        ? '/home/cache'
+        : `/home/${id.slice('home:'.length)}`;
+  return { id, label, item_count: itemCount, total_size: totalSize, error };
+}
+
+/** The xdg trash plus two extra sources, each with its own listing. */
+function sourcedRoutes(): Record<string, Route> {
+  return {
+    sources: [
+      sourceOf('xdg', 1, '5 B'),
+      sourceOf('cache', 12, '40 MB'),
+      sourceOf('home:alice', 1, '2 KB')
+    ],
+    list: listOf([file('one.txt')], '5 B'),
+    'list?source=cache': listOf([file('cache.bin')], '40 MB'),
+    'list?source=home%3Aalice': listOf([file('alice.txt')], '2 KB')
+  };
+}
+
+const sections = (widget: TrashWidget): HTMLElement[] =>
+  Array.from(
+    widget.node.querySelectorAll<HTMLElement>('.jp-TrashPanel-section')
+  );
+
+const sectionOf = (widget: TrashWidget, id: string): HTMLElement =>
+  find(widget, `.jp-TrashPanel-section[data-source="${id}"]`);
+
+const sectionHeader = (widget: TrashWidget, id: string) =>
+  sectionOf(widget, id).querySelector<HTMLButtonElement>(
+    '.jp-TrashPanel-sectionHeader'
+  )!;
+
+const sectionLabel = (widget: TrashWidget, id: string) =>
+  sectionOf(widget, id).querySelector<HTMLElement>(
+    '.jp-TrashPanel-sectionLabel'
+  )!;
+
+const sectionList = (widget: TrashWidget, id: string) =>
+  sectionOf(widget, id).querySelector<HTMLElement>(
+    '.jp-TrashPanel-sectionList'
+  )!;
+
+const sectionRows = (widget: TrashWidget, id: string): HTMLElement[] =>
+  Array.from(
+    sectionOf(widget, id).querySelectorAll<HTMLElement>(
+      '.jp-TrashPanel-sectionRow'
+    )
+  );
+
 beforeEach(() => {
   jest.useFakeTimers();
   request.mockReset();
   (showErrorMessage as jest.Mock).mockReset();
   (showDialog as jest.Mock).mockReset();
+  window.localStorage.clear();
 });
 
 afterEach(() => {
@@ -312,6 +394,57 @@ describe('summary bar', () => {
   });
 });
 
+describe('sort headers', () => {
+  const header = (widget: TrashWidget, column: string) =>
+    find<HTMLElement>(
+      widget,
+      `.jp-TrashPanel-columnHeader .jp-TrashPanel-col-${column}`
+    );
+
+  it('makes each header a button', async () => {
+    const widget = await open({ list: listOf([file('one.txt')]) });
+    expect(
+      [
+        header(widget, 'name'),
+        header(widget, 'modified'),
+        header(widget, 'size')
+      ].map(element => element.tagName)
+    ).toEqual(['BUTTON', 'BUTTON', 'BUTTON']);
+  });
+
+  it('names the column and its sort state', async () => {
+    const widget = await open({ list: listOf([file('one.txt')]) });
+    expect(header(widget, 'name').getAttribute('aria-label')).toBe(
+      'Name, not sorted'
+    );
+    expect(header(widget, 'modified').getAttribute('aria-label')).toBe(
+      'Deleted, sorted descending'
+    );
+    expect(header(widget, 'size').getAttribute('aria-label')).toBe(
+      'Size, not sorted'
+    );
+
+    click(header(widget, 'name'));
+    expect(header(widget, 'name').getAttribute('aria-label')).toBe(
+      'Name, sorted ascending'
+    );
+    click(header(widget, 'name'));
+    expect(header(widget, 'name').getAttribute('aria-label')).toBe(
+      'Name, sorted descending'
+    );
+  });
+
+  it('still sorts on a click', async () => {
+    const widget = await open({
+      list: listOf([file('b.txt'), file('a.txt')])
+    });
+    click(header(widget, 'name'));
+    expect(rowNames(widget)).toEqual(['a.txt', 'b.txt']);
+    click(header(widget, 'name'));
+    expect(rowNames(widget)).toEqual(['b.txt', 'a.txt']);
+  });
+});
+
 describe('reduced motion', () => {
   /** The panel holds no chip, no toggle and no override class. */
   function expectNoMotionControl(widget: TrashWidget): void {
@@ -334,34 +467,99 @@ describe('reduced motion', () => {
 });
 
 describe('refresh icon', () => {
-  it('turns until the load ends, 500 ms at least', async () => {
-    serve({ list: listOf([]) });
-    const widget = new TrashWidget(settings);
+  it('stays static after the initial load and over 500 ms', async () => {
+    const widget = await open({ list: listOf([file('one.txt')]) });
+    expect(rowNames(widget)).toEqual(['one.txt']);
+    expect(refreshButton(widget).classList).not.toContain('jp-mod-spinning');
 
-    void widget.refresh();
-    await jest.advanceTimersByTimeAsync(400);
-    expect(refreshButton(widget).classList).toContain('jp-mod-spinning');
-
-    await jest.advanceTimersByTimeAsync(200);
+    await jest.advanceTimersByTimeAsync(2000);
     expect(refreshButton(widget).classList).not.toContain('jp-mod-spinning');
   });
 
-  it('keeps turning while a slow load is pending', async () => {
+  it('stays static through a clicked refresh', async () => {
     const widget = await open({ list: listOf([]) });
     const slow = deferred<unknown>();
     serve({ list: () => slow.promise });
 
     refreshButton(widget).click();
     await jest.advanceTimersByTimeAsync(2000);
-    expect(refreshButton(widget).classList).toContain('jp-mod-spinning');
+    expect(refreshButton(widget).classList).not.toContain('jp-mod-spinning');
+    expect(refreshButton(widget).getAttribute('aria-busy')).toBe('true');
+    expect(refreshButton(widget).classList).toContain('jp-mod-busy');
 
-    slow.resolve(listOf([]));
+    slow.resolve(listOf([file('one.txt')]));
     await settle();
     expect(refreshButton(widget).classList).not.toContain('jp-mod-spinning');
+    expect(refreshButton(widget).getAttribute('aria-busy')).toBe('false');
+    expect(refreshButton(widget).classList).not.toContain('jp-mod-busy');
+    expect(rowNames(widget)).toEqual(['one.txt']);
+  });
+
+  it('clears the busy mark when a warm refresh never returns', async () => {
+    const widget = await open({ list: listOf([file('one.txt')]) });
+    let answered = false;
+    const hung = deferred<unknown>();
+    hung.promise.then(() => (answered = true));
+    serve({ list: () => hung.promise });
+
+    refreshButton(widget).click();
+    await jest.advanceTimersByTimeAsync(100);
+    expect(refreshButton(widget).getAttribute('aria-busy')).toBe('true');
+
+    await jest.advanceTimersByTimeAsync(121000);
+    expect(refreshButton(widget).getAttribute('aria-busy')).toBe('false');
+    expect(refreshButton(widget).classList).not.toContain('jp-mod-busy');
+    // The mark timed out visually; the request itself is still pending
+    expect(answered).toBe(false);
+    expect(requested()).toHaveLength(2);
+  });
+
+  it('clears the busy mark after a stale refresh and a second one', async () => {
+    const widget = await open({ list: listOf([file('one.txt')]) });
+    const hung = deferred<unknown>();
+    serve({ list: () => hung.promise });
+
+    refreshButton(widget).click();
+    await jest.advanceTimersByTimeAsync(100);
+    expect(refreshButton(widget).getAttribute('aria-busy')).toBe('true');
+
+    // The stale timer clears the mark while the request is still pending
+    await jest.advanceTimersByTimeAsync(121000);
+    expect(refreshButton(widget).getAttribute('aria-busy')).toBe('false');
+
+    // The late answer must not drive the counter below zero
+    hung.resolve(listOf([file('one.txt')]));
+    await settle();
+
+    serve({ list: listOf([file('one.txt')]) });
+    refreshButton(widget).click();
+    await settle();
+
+    expect(refreshButton(widget).getAttribute('aria-busy')).toBe('false');
+    expect(refreshButton(widget).classList).not.toContain('jp-mod-busy');
   });
 });
 
 describe('loading veil', () => {
+  it('announces the load to assistive technology', async () => {
+    const widget = await open({ list: listOf([]) });
+    expect(veil(widget).getAttribute('role')).toBe('status');
+    expect(veil(widget).getAttribute('aria-label')).toBeTruthy();
+  });
+
+  it('marks the list busy while a load is pending', async () => {
+    const slow = deferred<unknown>();
+    serve({ list: () => slow.promise });
+    const widget = new TrashWidget(settings);
+    void widget.refresh();
+    await jest.advanceTimersByTimeAsync(100);
+    expect(listBox(widget).getAttribute('aria-busy')).toBe('true');
+
+    slow.resolve(listOf([]));
+    await settle();
+    expect(listBox(widget).getAttribute('aria-busy')).toBe('false');
+  });
+
   it('covers the panel on the first open until the first load ends', async () => {
     const first = deferred<unknown>();
     serve({ list: () => first.promise });
@@ -377,6 +575,26 @@ describe('loading veil', () => {
     expect(veil(widget).hidden).toBe(true);
   });
 
+  it('comes down when a hung first load is bypassed by the background refresh', async () => {
+    const hung = deferred<unknown>();
+    serve({ list: () => hung.promise });
+    const widget = new TrashWidget(settings);
+    void widget.refresh();
+    await jest.advanceTimersByTimeAsync(100);
+    expect(veil(widget).hidden).toBe(false);
+
+    // The first load hangs past the stale threshold, so the background
+    // refresh chases it and renders rows under the raised veil
+    await jest.advanceTimersByTimeAsync(121000);
+    serve({ list: listOf([file('fresh.txt')]) });
+    await (widget as any)._refreshInBackground();
+    await settle();
+
+    expect(requested()).toEqual(['list', 'list']);
+    expect(rowNames(widget)).toEqual(['fresh.txt']);
+    expect(veil(widget).hidden).toBe(true);
+  });
+
   it('stays down on a refresh click after the first load', async () => {
     const widget = await open({ list: listOf([file('one.txt')]) });
     const slow = deferred<unknown>();
@@ -385,7 +603,7 @@ describe('loading veil', () => {
     refreshButton(widget).click();
     await jest.advanceTimersByTimeAsync(100);
     expect(veil(widget).hidden).toBe(true);
-    expect(refreshButton(widget).classList).toContain('jp-mod-spinning');
+    expect(refreshButton(widget).classList).not.toContain('jp-mod-spinning');
     expect(rowNames(widget)).toEqual(['one.txt']);
 
     slow.resolve(listOf([file('one.txt')]));
@@ -500,7 +718,7 @@ describe('folder navigation', () => {
     );
   });
 
-  it('turns the refresh icon while a folder loads', async () => {
+  it('keeps the refresh icon static while a folder loads', async () => {
     const slow = deferred<unknown>();
     const widget = await open({
       list: listOf([folder('a')]),
@@ -508,7 +726,8 @@ describe('folder navigation', () => {
     });
     doubleClick(rows(widget)[0]);
     await jest.advanceTimersByTimeAsync(2000);
-    expect(refreshButton(widget).classList).toContain('jp-mod-spinning');
+    expect(requested()).toEqual(['list', 'list?path=a']);
+    expect(refreshButton(widget).classList).not.toContain('jp-mod-spinning');
     expect(veil(widget).hidden).toBe(true);
 
     slow.resolve(listOf([]));
@@ -893,6 +1112,42 @@ describe('focus edges', () => {
     expect(document.activeElement).not.toBe(aCrumb);
   });
 
+  it('keeps focus on the same sort header across a reload', async () => {
+    const widget = await openAttached({ list: three() });
+    const nameHeader = find<HTMLButtonElement>(
+      widget,
+      '.jp-TrashPanel-columnHeader .jp-TrashPanel-col-name'
+    );
+    nameHeader.focus();
+    expect(document.activeElement).toBe(nameHeader);
+
+    serve({ list: three() });
+    await (widget as any)._refreshInBackground();
+
+    const rebuilt = find<HTMLButtonElement>(
+      widget,
+      '.jp-TrashPanel-columnHeader .jp-TrashPanel-col-name'
+    );
+    expect(document.activeElement).toBe(rebuilt);
+  });
+
+  it('moves focus to refresh when an empty reload hides a focused sort header', async () => {
+    const widget = await openAttached({ list: three() });
+    const nameHeader = find<HTMLButtonElement>(
+      widget,
+      '.jp-TrashPanel-columnHeader .jp-TrashPanel-col-name'
+    );
+    nameHeader.focus();
+
+    serve({ list: listOf([]) });
+    await (widget as any)._refreshInBackground();
+
+    expect(find(widget, '.jp-TrashPanel-columnHeader').style.display).toBe(
+      'none'
+    );
+    expect(document.activeElement).toBe(refreshButton(widget));
+  });
+
   it('returns focus to the list and its active row when the keyboard menu closes', async () => {
     const widget = await openAttached({ list: three() });
     const list = listBox(widget);
@@ -982,6 +1237,246 @@ describe('load order', () => {
     slow.resolve(listOf([file('one.txt', 'a')]));
     await settle();
     expect(rowNames(widget)).toEqual(['one.txt']);
+  });
+
+  it('lets the background refresh through a pending load only when it is stale', async () => {
+    const slow = deferred<unknown>();
+    const chase = deferred<unknown>();
+    let opened = 0;
+    const widget = await open({
+      list: listOf([folder('a')]),
+      'list?path=a': () => (opened++ === 0 ? slow.promise : chase.promise)
+    });
+    doubleClick(rows(widget)[0]);
+    await jest.advanceTimersByTimeAsync(100);
+
+    // Younger than the stale threshold, the pending load still blocks it
+    await (widget as any)._refreshInBackground();
+    expect(requested()).toEqual(['list', 'list?path=a']);
+
+    // Past the threshold the chase re-requests the pending folder, not the root
+    await jest.advanceTimersByTimeAsync(120000);
+    const chasing = (widget as any)._refreshInBackground();
+    expect(requested()).toEqual(['list', 'list?path=a', 'list?path=a']);
+
+    // A second tick does not start a chase while the first one is in flight
+    await (widget as any)._refreshInBackground();
+    expect(requested()).toEqual(['list', 'list?path=a', 'list?path=a']);
+
+    chase.resolve(listOf([file('fresh.txt', 'a')]));
+    await chasing;
+    await settle();
+    expect(breadcrumb(widget).textContent).toBe('Trash/a');
+    expect(rowNames(widget)).toEqual(['fresh.txt']);
+  });
+
+  it('measures the stale threshold from the oldest pending load', async () => {
+    const hung = deferred<unknown>();
+    const widget = await open({
+      list: listOf([folder('a'), folder('b')]),
+      'list?path=a': () => hung.promise,
+      'list?path=b': listOf([file('in-b.txt', 'b')])
+    });
+
+    // Folder a hangs, then the newer load for folder b finishes
+    doubleClick(rows(widget)[rowNames(widget).indexOf('a')]);
+    await jest.advanceTimersByTimeAsync(100000);
+    doubleClick(rows(widget)[rowNames(widget).indexOf('b')]);
+    await settle();
+    expect(rowNames(widget)).toEqual(['in-b.txt']);
+
+    // The settled load no longer counts; only the hung one is past the threshold
+    await jest.advanceTimersByTimeAsync(30000);
+    serve({ 'list?path=b': listOf([file('fresh.txt', 'b')]) });
+    const before = requested().length;
+    await (widget as any)._refreshInBackground();
+
+    expect(requested()).toHaveLength(before + 1);
+    expect(requested()[before]).toBe('list?path=b');
+    expect(breadcrumb(widget).textContent).toBe('Trash/b');
+    expect(rowNames(widget)).toEqual(['fresh.txt']);
+  });
+
+  it('does not chase over a younger pending navigation', async () => {
+    const hung = deferred<unknown>();
+    const slow = deferred<unknown>();
+    const widget = await open({
+      list: listOf([folder('a'), folder('b')]),
+      'list?path=a': () => hung.promise,
+      'list?path=b': () => slow.promise
+    });
+
+    // Folder a hangs past the threshold, then a navigation to b starts
+    doubleClick(rows(widget)[rowNames(widget).indexOf('a')]);
+    await jest.advanceTimersByTimeAsync(121000);
+    doubleClick(rows(widget)[rowNames(widget).indexOf('b')]);
+    await jest.advanceTimersByTimeAsync(20000);
+
+    // The newest pending load is 20 s old, so no background request is made
+    const before = requested().length;
+    await (widget as any)._refreshInBackground();
+    expect(requested()).toHaveLength(before);
+
+    // The navigation's own answer still renders
+    slow.resolve(listOf([file('in-b.txt', 'b')]));
+    await settle();
+    expect(breadcrumb(widget).textContent).toBe('Trash/b');
+    expect(rowNames(widget)).toEqual(['in-b.txt']);
+  });
+
+  it('does not chase on the age of a settled load', async () => {
+    const hung = deferred<unknown>();
+    const slow = deferred<unknown>();
+    const widget = await open({
+      list: listOf([folder('a'), folder('b')]),
+      'list?path=a': () => hung.promise,
+      'list?path=b': () => slow.promise
+    });
+
+    // Folder a hangs past the threshold, then a navigation to b starts
+    doubleClick(rows(widget)[rowNames(widget).indexOf('a')]);
+    await jest.advanceTimersByTimeAsync(121000);
+    doubleClick(rows(widget)[rowNames(widget).indexOf('b')]);
+
+    // Folder a's answer arrives after b started; a's target differs from the
+    // newest request, so the superseded answer is dropped
+    hung.resolve(listOf([file('in-a.txt', 'a')]));
+    await settle();
+    expect(breadcrumb(widget).textContent).toBe('Trash');
+
+    // b is 29.4 s old; a's settled start must not fire a chase
+    await jest.advanceTimersByTimeAsync(28800);
+    const before = requested().length;
+    await (widget as any)._refreshInBackground();
+    expect(requested()).toHaveLength(before);
+
+    slow.resolve(listOf([file('in-b.txt', 'b')]));
+    await settle();
+    expect(breadcrumb(widget).textContent).toBe('Trash/b');
+    expect(rowNames(widget)).toEqual(['in-b.txt']);
+  });
+
+  it('renders a listing that answers after a chase has started', async () => {
+    const slow = deferred<unknown>();
+    const chase = deferred<unknown>();
+    let opened = 0;
+    const widget = await open({
+      list: listOf([folder('a')]),
+      'list?path=a': () => (opened++ === 0 ? slow.promise : chase.promise)
+    });
+    doubleClick(rows(widget)[0]);
+    await jest.advanceTimersByTimeAsync(120000);
+
+    // At the threshold the background refresh chases the same folder
+    const chasing = (widget as any)._refreshInBackground();
+    expect(requested()).toEqual(['list', 'list?path=a', 'list?path=a']);
+
+    // The first listing answers at 130 s, after the chase started
+    await jest.advanceTimersByTimeAsync(10000);
+    slow.resolve(listOf([file('one.txt', 'a')]));
+    await settle();
+
+    expect(breadcrumb(widget).textContent).toBe('Trash/a');
+    expect(rowNames(widget)).toEqual(['one.txt']);
+
+    chase.resolve(listOf([file('one.txt', 'a')]));
+    await chasing;
+  });
+
+  it('renders a chased answer for the pending folder over a newer chase', async () => {
+    const hung = deferred<unknown>();
+    const older = deferred<unknown>();
+    const newer = deferred<unknown>();
+    const answers = [hung.promise, older.promise, newer.promise];
+    let opened = 0;
+    const widget = await open({
+      list: listOf([folder('a')]),
+      'list?path=a': () => answers[opened++]
+    });
+    doubleClick(rows(widget)[0]);
+    await jest.advanceTimersByTimeAsync(121000);
+
+    // The first chase re-requests the pending folder and stays in flight
+    const firstChase = (widget as any)._refreshInBackground();
+    expect(requested()).toEqual(['list', 'list?path=a', 'list?path=a']);
+
+    // A second chase for the same folder starts at the next stale boundary
+    await jest.advanceTimersByTimeAsync(120000);
+    const secondChase = (widget as any)._refreshInBackground();
+    expect(requested()).toEqual([
+      'list',
+      'list?path=a',
+      'list?path=a',
+      'list?path=a'
+    ]);
+
+    // The first chase answers the newest requested location while the newer
+    // request for that same location is still pending, so it renders
+    older.resolve(listOf([file('first.txt', 'a')]));
+    await firstChase;
+    expect(breadcrumb(widget).textContent).toBe('Trash/a');
+    expect(rowNames(widget)).toEqual(['first.txt']);
+
+    newer.resolve(listOf([file('second.txt', 'a')]));
+    await secondChase;
+    await settle();
+    expect(rowNames(widget)).toEqual(['second.txt']);
+  });
+
+  it('chases once per stale window while a load hangs', async () => {
+    const hung = deferred<unknown>();
+    const chased = deferred<unknown>();
+    let opened = 0;
+    const widget = await open({
+      list: listOf([folder('a')]),
+      'list?path=a': () => (opened++ === 0 ? hung.promise : chased.promise)
+    });
+    doubleClick(rows(widget)[0]);
+    await jest.advanceTimersByTimeAsync(121000);
+
+    // The first tick past the threshold starts a chase
+    const first = (widget as any)._refreshInBackground();
+    expect(requested()).toEqual(['list', 'list?path=a', 'list?path=a']);
+
+    // 100 s into the chase's window, another tick starts no chase
+    await jest.advanceTimersByTimeAsync(100000);
+    await (widget as any)._refreshInBackground();
+    expect(requested()).toEqual(['list', 'list?path=a', 'list?path=a']);
+
+    // At the 120 s boundary the newest pending start is stale, so a second
+    // chase starts even while the first one is still in flight
+    await jest.advanceTimersByTimeAsync(20000);
+    const second = (widget as any)._refreshInBackground();
+    expect(requested()).toEqual([
+      'list',
+      'list?path=a',
+      'list?path=a',
+      'list?path=a'
+    ]);
+
+    // Both chases answer with the same listing and both render it
+    chased.resolve(listOf([file('fresh.txt', 'a')]));
+    await first;
+    await second;
+    await settle();
+    expect(rowNames(widget)).toEqual(['fresh.txt']);
+
+    // The original load is still pending past its window, so a later tick
+    // chases again
+    await jest.advanceTimersByTimeAsync(10000);
+    serve({
+      list: listOf([folder('a')]),
+      'list?path=a': listOf([file('again.txt', 'a')])
+    });
+    await (widget as any)._refreshInBackground();
+    expect(requested()).toEqual([
+      'list',
+      'list?path=a',
+      'list?path=a',
+      'list?path=a',
+      'list?path=a'
+    ]);
+    expect(rowNames(widget)).toEqual(['again.txt']);
   });
 
   it('ignores a background response that a navigation overtook', async () => {
@@ -1115,5 +1610,211 @@ describe('Empty Trash', () => {
     expect(breadcrumb(widget).hidden).toBe(true);
     expect(summary(widget).textContent).toBe('0 items · 0 B');
     expect(showErrorMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('trash sources', () => {
+  it('renders the returned sources in order below the main list, absent ones omitted', async () => {
+    const widget = await open(sourcedRoutes());
+
+    // The xdg trash stays the main listing
+    expect(rowNames(widget)).toEqual(['one.txt']);
+    expect(widget.node.querySelector('[data-source="xdg"]')).toBeNull();
+
+    // A section per extra source, in the order the server returned them
+    expect(sections(widget).map(element => element.dataset.source)).toEqual([
+      'cache',
+      'home:alice'
+    ]);
+    expect(listBox(widget).compareDocumentPosition(sections(widget)[0])).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+
+    // A source the server did not return has no section
+    expect(widget.node.querySelector('[data-source="home:bob"]')).toBeNull();
+  });
+
+  it('reports each source count and size in its header', async () => {
+    const widget = await open(sourcedRoutes());
+    expect(sectionLabel(widget, 'cache').textContent).toBe(
+      '/home/cache (12 items, 40 MB)'
+    );
+    expect(sectionLabel(widget, 'home:alice').textContent).toBe(
+      '/home/alice (1 item, 2 KB)'
+    );
+  });
+
+  it('collapses on a header click, writes the key, and reloads collapsed', async () => {
+    const widget = await open(sourcedRoutes());
+    const header = sectionHeader(widget, 'cache');
+    expect(header.tagName).toBe('BUTTON');
+    expect(header.getAttribute('type')).toBe('button');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(sectionRows(widget, 'cache')).toHaveLength(1);
+
+    click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(sectionList(widget, 'cache').hidden).toBe(true);
+    expect(sectionLabel(widget, 'cache').textContent).toBe(
+      '/home/cache (12 items, 40 MB)'
+    );
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'cache'
+    ]);
+
+    // A fresh widget reads the same key and draws the section collapsed
+    const again = await open(sourcedRoutes());
+    expect(sectionHeader(again, 'cache').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(sectionList(again, 'cache').hidden).toBe(true);
+    expect(sectionLabel(again, 'cache').textContent).toBe(
+      '/home/cache (12 items, 40 MB)'
+    );
+    expect(
+      sectionHeader(again, 'home:alice').getAttribute('aria-expanded')
+    ).toBe('true');
+  });
+
+  it('toggles from the keyboard with Enter and Space', async () => {
+    const widget = await openAttached(sourcedRoutes());
+    const header = sectionHeader(widget, 'home:alice');
+    header.focus();
+
+    press(header, 'Enter');
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'home:alice'
+    ]);
+
+    press(header, ' ');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(header);
+  });
+
+  it('renders the main list and the cache section while a home listing is held', async () => {
+    const held = deferred<unknown>();
+    const routes = sourcedRoutes();
+    routes['list?source=home%3Aalice'] = () => held.promise;
+    const widget = await open(routes);
+
+    // The xdg list and the cache section answer without the held source
+    expect(rowNames(widget)).toEqual(['one.txt']);
+    expect(sectionRows(widget, 'cache')).toHaveLength(1);
+    expect(sectionRows(widget, 'home:alice')).toHaveLength(0);
+
+    held.resolve(listOf([file('alice.txt')], '2 KB'));
+    await settle();
+    expect(sectionRows(widget, 'home:alice')).toHaveLength(1);
+  });
+
+  it('posts scope all from the clean-all dialog after naming every source', async () => {
+    const widget = await open(sourcedRoutes());
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const routes = sourcedRoutes();
+    routes.empty = {
+      success: true,
+      deleted_count: 3,
+      sources: [
+        { id: 'xdg', label: 'Trash', deleted_count: 1, errors: [] },
+        { id: 'cache', label: '/home/cache', deleted_count: 2, errors: [] }
+      ]
+    };
+    serve(routes);
+
+    await (widget as any)._commands.execute('trash:clean-all');
+    await settle();
+
+    const dialog = (showDialog as jest.Mock).mock.calls[0][0];
+    expect(dialog.title).toBe('Clean All Sources');
+    expect(dialog.body).toContain('Trash (1 item, 5 B)');
+    expect(dialog.body).toContain('/home/cache (12 items, 40 MB)');
+    expect(dialog.body).toContain('/home/alice (1 item, 2 KB)');
+
+    const empty = request.mock.calls.find(call => call[0] === 'empty')!;
+    expect(JSON.parse(empty[2].body)).toEqual({ scope: 'all' });
+
+    // The run reports its per-source counts afterwards
+    const report = (showDialog as jest.Mock).mock.calls[1][0];
+    expect(report.body).toContain('Trash: 1 item deleted');
+    expect(report.body).toContain('/home/cache: 2 items deleted');
+  });
+
+  it('names the workspace root and posts scope workspace', async () => {
+    PageConfig.setOption('serverRoot', '/home/lab/workspace');
+    const widget = await open(sourcedRoutes());
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const routes = sourcedRoutes();
+    routes.empty = {
+      success: true,
+      deleted_count: 2,
+      left_count: 3,
+      sources: [
+        { id: 'xdg', label: 'Trash', deleted_count: 1, errors: [] },
+        { id: 'cache', label: '/home/cache', deleted_count: 1, errors: [] }
+      ]
+    };
+    serve(routes);
+
+    await (widget as any)._commands.execute('trash:clean-workspace');
+    await settle();
+
+    const dialog = (showDialog as jest.Mock).mock.calls[0][0];
+    expect(dialog.title).toBe('Clean Workspace');
+    expect(dialog.body).toContain('/home/lab/workspace');
+    expect(dialog.body).toContain('Only entries under');
+    expect(dialog.body).toContain('/home/cache (12 items, 40 MB)');
+    expect(dialog.body).toContain('/home/alice (1 item, 2 KB)');
+
+    const empty = request.mock.calls.find(call => call[0] === 'empty')!;
+    expect(JSON.parse(empty[2].body)).toEqual({ scope: 'workspace' });
+
+    // The run reports the per-source counts and the left count
+    const report = (showDialog as jest.Mock).mock.calls[1][0];
+    expect(report.body).toContain('Trash: 1 item deleted');
+    expect(report.body).toContain('3 items left');
+  });
+
+  it('renders no section for an absent source and an error header for an unreadable one', async () => {
+    const routes = sourcedRoutes();
+    routes.sources = [
+      sourceOf('xdg', 1, '5 B'),
+      sourceOf('cache', 0, '0 B', 'Permission denied')
+    ];
+    const widget = await open(routes);
+
+    expect(widget.node.querySelector('[data-source="home:alice"]')).toBeNull();
+    expect(sectionLabel(widget, 'cache').textContent).toContain(
+      'Permission denied'
+    );
+    expect(sectionRows(widget, 'cache')).toHaveLength(0);
+    expect(requested()).not.toContain('list?source=cache');
+  });
+
+  it('renders the error in the header when a section listing fails', async () => {
+    const routes = sourcedRoutes();
+    routes['list?source=cache'] = () => Promise.reject(httpError(500));
+    const widget = await open(routes);
+
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(sectionLabel(widget, 'cache').textContent).toContain('HTTP 500');
+    expect(sectionRows(widget, 'cache')).toHaveLength(0);
+  });
+
+  it('carries no animation on the section header or caret', async () => {
+    const widget = await open(sourcedRoutes());
+    const header = sectionHeader(widget, 'cache');
+    const caret = header.querySelector<HTMLElement>('.jp-TrashPanel-caret')!;
+
+    expect(header.className).toBe('jp-TrashPanel-sectionHeader');
+    expect(caret.className).toBe('jp-TrashPanel-caret');
+    expect(header.getAttribute('aria-hidden')).toBeNull();
+    expect(caret.getAttribute('aria-hidden')).toBe('true');
+    for (const element of [header, caret]) {
+      expect(element.style.getPropertyValue('animation')).toBe('');
+      expect(element.style.getPropertyValue('transition')).toBe('');
+    }
   });
 });

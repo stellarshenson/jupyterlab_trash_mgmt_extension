@@ -71,6 +71,22 @@
   height: 14px;
 }
 
+/* Warm refresh in flight: a static ring in one theme colour. It never
+   rotates, so the refresh button gives a mark without motion. */
+.jp-TrashPanel-header-button.jp-mod-busy {
+  position: relative;
+  cursor: progress;
+}
+
+.jp-TrashPanel-header-button.jp-mod-busy::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border: 2px solid var(--jp-ui-font-color0);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
 /* `display: flex` above would beat the user-agent `[hidden] { display: none }`,
    so the hidden state has to be restated. */
 .jp-TrashPanel-header-button[hidden] {
@@ -165,6 +181,32 @@
   flex-shrink: 0;
 }
 
+/* Sortable column headers */
+.jp-TrashPanel-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The headers are buttons so the keyboard reaches them; reset the button
+   chrome so they render exactly as the plain text they were. */
+.jp-TrashPanel-columnHeader .jp-TrashPanel-sortable {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.jp-TrashPanel-sortable:hover {
+  color: var(--jp-ui-font-color1);
+}
+
+.jp-TrashPanel-columnHeader .jp-TrashPanel-sortable:focus-visible {
+  outline: var(--jp-focus-outline-width, 2px) solid var(--jp-brand-color1);
+  outline-offset: 1px;
+}
+
 .jp-TrashPanel-columnHeader .jp-TrashPanel-col-name {
   flex: 1;
   min-width: 0;
@@ -182,16 +224,6 @@
   width: 60px;
   flex-shrink: 0;
   text-align: right;
-}
-
-/* Sortable column headers */
-.jp-TrashPanel-sortable {
-  cursor: pointer;
-  user-select: none;
-}
-
-.jp-TrashPanel-sortable:hover {
-  color: var(--jp-ui-font-color1);
 }
 
 .jp-TrashPanel-sortArrow {
@@ -302,6 +334,110 @@
   text-overflow: ellipsis;
 }
 
+/* Extra trash sources: one section each, below the main list. The header is
+   a band copied from the Passkey vault sections: the 14px caret takes the
+   insetting, so the label still starts in the text column. */
+.jp-TrashPanel-sections {
+  flex: 0 1 auto;
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+.jp-TrashPanel-section {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--jp-border-color3);
+}
+
+.jp-TrashPanel-sectionHeader {
+  padding: 4px 4px 4px 18px;
+  background: var(--jp-layout-color2);
+  color: var(--jp-ui-font-color1);
+  font-size: var(--jp-ui-font-size0);
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+button.jp-TrashPanel-sectionHeader {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding-left: 4px;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+button.jp-TrashPanel-sectionHeader:hover {
+  background: var(--jp-layout-color3);
+}
+
+button.jp-TrashPanel-sectionHeader:focus-visible {
+  outline: 1px solid var(--jp-ui-font-color0);
+  outline-offset: -1px;
+}
+
+.jp-TrashPanel-caret {
+  flex: 0 0 auto;
+  width: 14px;
+  color: var(--jp-ui-font-color2);
+}
+
+.jp-TrashPanel-sectionLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jp-TrashPanel-sectionList {
+  display: flex;
+  flex-direction: column;
+}
+
+/* `display: flex` above would beat the user-agent `[hidden]` rule */
+.jp-TrashPanel-sectionList[hidden] {
+  display: none;
+}
+
+.jp-TrashPanel-sectionRow {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px 0 18px;
+}
+
+.jp-TrashPanel-sectionName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jp-TrashPanel-sectionAge {
+  flex: 0 0 auto;
+  width: 60px;
+  padding-right: 8px;
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size0);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.jp-TrashPanel-sectionSize {
+  flex: 0 0 auto;
+  width: 60px;
+  color: var(--jp-ui-font-color2);
+  font-size: var(--jp-ui-font-size0);
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* Empty state */
 .jp-TrashPanel-empty {
   display: flex;
@@ -313,7 +449,7 @@
   padding: 12px;
 }
 
-/* Refresh button and loading ring rotation */
+/* Loading ring rotation */
 @keyframes jp-trash-panel-spin {
   from {
     transform: rotate(0deg);
@@ -322,10 +458,6 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-.jp-TrashPanel-header-button.jp-mod-spinning svg {
-  animation: jp-trash-panel-spin 0.9s linear infinite;
 }
 
 /* Full-panel veil, raised while there is no list to show yet and while a

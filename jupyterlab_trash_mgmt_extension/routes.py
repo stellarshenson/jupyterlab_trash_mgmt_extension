@@ -1,7 +1,9 @@
+import errno
 import json
 import os
 import shutil
 import threading
+import time
 import urllib.parse
 from configparser import ConfigParser
 from datetime import datetime
@@ -16,6 +18,40 @@ def get_trash_dir() -> Path:
     """Get the XDG trash directory path."""
     xdg_data_home = os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
     return Path(xdg_data_home) / 'Trash'
+
+
+# The root the cache and the home trashes are found under. Tests point it at a temporary tree.
+HOMES_ROOT = Path('/home')
+
+
+_RMTREE_ATTEMPTS = 3
+_RMTREE_RETRY_DELAY = 0.1
+
+
+def remove_tree(path) -> None:
+    """Remove a directory tree, retrying while another process refills it.
+
+    ENOTEMPTY during the walk means an entry was recreated after rmtree
+    removed it; the writer gets a few short waits before the error is raised.
+    """
+    for attempt in range(1, _RMTREE_ATTEMPTS + 1):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as error:
+            if error.errno != errno.ENOTEMPTY or attempt == _RMTREE_ATTEMPTS:
+                raise
+            time.sleep(_RMTREE_RETRY_DELAY)
+
+
+def remove_entry(entry: Path) -> None:
+    """Remove one trashed entry, unlinking a symlink instead of following it."""
+    if entry.is_symlink():
+        entry.unlink()
+    elif entry.is_dir():
+        remove_tree(str(entry))
+    else:
+        entry.unlink()
 
 
 # Directory sizes keyed by absolute path: (lstat mtime_ns, exact byte size).
@@ -161,7 +197,7 @@ def parse_trashinfo(info_path: Path) -> dict:
     return result
 
 
-def resolve_trash_path(trash_path) -> Path:
+def resolve_trash_path(trash_path, trash_dir: Path | None = None) -> Path:
     """Map a path relative to Trash/files onto the filesystem.
 
     Raises ValueError for a path that could leave Trash/files: an absolute
@@ -173,7 +209,7 @@ def resolve_trash_path(trash_path) -> Path:
     parts = trash_path.split('/')
     if any(part in ('', '.', '..') for part in parts):
         raise ValueError('Invalid trash path')
-    current = get_trash_dir() / 'files'
+    current = (trash_dir or get_trash_dir()) / 'files'
     for part in parts[:-1]:
         current = current / part
         if current.is_symlink():
@@ -181,14 +217,14 @@ def resolve_trash_path(trash_path) -> Path:
     return current / parts[-1]
 
 
-def get_trash_metadata(trash_path: str) -> dict:
+def get_trash_metadata(trash_path: str, trash_dir: Path | None = None) -> dict:
     """Original path and deletion date of an entry at any depth.
 
     Both come from the .trashinfo of the top-level item; a nested entry gets
     the original path of that item extended by its own relative path.
     """
     top, _, inner = trash_path.partition('/')
-    info_file = get_trash_dir() / 'info' / f"{top}.trashinfo"
+    info_file = (trash_dir or get_trash_dir()) / 'info' / f"{top}.trashinfo"
     metadata = parse_trashinfo(info_file) if info_file.exists() else {}
     original_path = metadata.get('original_path', '')
     if original_path and inner:
@@ -199,14 +235,14 @@ def get_trash_metadata(trash_path: str) -> dict:
     }
 
 
-def collect_listing(folder: str) -> tuple[int | None, dict]:
+def collect_listing(folder: str, trash_dir: Path | None = None) -> tuple[int | None, dict]:
     """Build the /list response body for a folder path, with its HTTP status."""
     # strip=False: a folder name may start or end with a space
-    listed = get_trash_dir() / 'files'
+    listed = (trash_dir or get_trash_dir()) / 'files'
 
     if folder:
         try:
-            listed = resolve_trash_path(folder)
+            listed = resolve_trash_path(folder, trash_dir)
         except ValueError as e:
             return 400, {'error': str(e)}
 
@@ -221,7 +257,7 @@ def collect_listing(folder: str) -> tuple[int | None, dict]:
             return 400, {'error': 'Not a folder'}
 
     # Inside a folder every entry shares the trashinfo of the top-level item
-    folder_metadata = get_trash_metadata(folder) if folder else None
+    folder_metadata = get_trash_metadata(folder, trash_dir) if folder else None
 
     items = []
     names = set()
@@ -238,7 +274,7 @@ def collect_listing(folder: str) -> tuple[int | None, dict]:
             try:
                 if folder_metadata is None:
                     trash_path = entry.name
-                    metadata = get_trash_metadata(trash_path)
+                    metadata = get_trash_metadata(trash_path, trash_dir)
                 else:
                     trash_path = f"{folder}/{entry.name}"
                     original_path = folder_metadata['original_path']
@@ -279,6 +315,127 @@ def collect_listing(folder: str) -> tuple[int | None, dict]:
     }
 
 
+def source_candidates() -> list[dict]:
+    """Every possible trash source in display order, present or not.
+
+    A home is only a candidate when its own directory is a real directory:
+    a symlink under the homes root is not followed out of that root.
+    """
+    candidates = [
+        {
+            'id': 'xdg',
+            'label': 'Trash',
+            'path': get_trash_dir(),
+            'root': get_trash_dir().parent
+        },
+        {
+            'id': 'cache',
+            'label': '/home/cache',
+            'path': HOMES_ROOT / 'cache',
+            'root': HOMES_ROOT
+        },
+    ]
+
+    try:
+        homes = sorted(os.scandir(HOMES_ROOT), key=lambda entry: entry.name)
+    except OSError:
+        homes = []
+    for entry in homes:
+        try:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+        except OSError:
+            continue
+        home = Path(entry.path)
+        candidates.append({
+            'id': f'home:{entry.name}',
+            'label': f'/home/{entry.name}',
+            'path': home / '.local' / 'share' / 'Trash',
+            'root': home
+        })
+    return candidates
+
+
+def resolve_source(candidate: dict) -> Path | None:
+    """The source's resolved trash directory, or None when absent or outside its root."""
+    try:
+        directory = candidate['path'].resolve()
+        directory.relative_to(candidate['root'].resolve())
+        if not directory.is_dir():
+            return None
+    except (ValueError, OSError):
+        return None
+    return directory
+
+
+def existing_sources() -> list[dict]:
+    """Every existing source in display order, with its resolved directory.
+
+    A candidate whose directory has the file identity (device and inode) of one
+    an earlier candidate already returned is skipped, so a bind mount alias of
+    an earlier source is listed once. A resolved path cannot see a bind mount.
+    """
+    sources = []
+    seen = set()
+    for candidate in source_candidates():
+        directory = resolve_source(candidate)
+        if directory is None:
+            continue
+        try:
+            info = directory.stat()
+        except OSError:
+            continue
+        identity = (info.st_dev, info.st_ino)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        sources.append({**candidate, 'directory': directory})
+    return sources
+
+
+def collect_sources() -> list[dict]:
+    """The /sources response: each existing source with its count and size."""
+    sources = []
+    for source in existing_sources():
+        entry = {
+            'id': source['id'],
+            'label': source['label'],
+            'item_count': 0,
+            'total_size': format_size(0),
+            'error': ''
+        }
+        try:
+            _status, body = collect_listing('', source['directory'])
+            entry['item_count'] = body['item_count']
+            entry['total_size'] = body['total_size_formatted']
+        except (PermissionError, OSError) as error:
+            entry['error'] = str(error)
+        sources.append(entry)
+    return sources
+
+
+def collect_source_listing(source_id: str, folder: str) -> tuple[int | None, dict]:
+    """The /list response for one source id."""
+    candidate = next(
+        (item for item in source_candidates() if item['id'] == source_id), None
+    )
+    if candidate is None:
+        return 400, {'error': 'Unknown trash source'}
+
+    directory = resolve_source(candidate)
+    if directory is not None:
+        return collect_listing(folder, directory)
+
+    if folder:
+        return 404, {'error': 'Folder not found in trash'}
+    return None, {
+        'items': [],
+        'total_size': 0,
+        'total_size_formatted': format_size(0),
+        'item_count': 0
+    }
+
+
 class TrashStatusHandler(APIHandler):
     """Handler for checking if trash functionality is enabled."""
 
@@ -293,15 +450,27 @@ class TrashStatusHandler(APIHandler):
         }))
 
 
+class TrashSourcesHandler(APIHandler):
+    """Handler for listing the available trash sources."""
+
+    @tornado.web.authenticated
+    async def get(self):
+        sources = await tornado.ioloop.IOLoop.current().run_in_executor(
+            None, collect_sources
+        )
+        self.finish(json.dumps(sources))
+
+
 class TrashListHandler(APIHandler):
     """Handler for listing trash contents."""
 
     @tornado.web.authenticated
     async def get(self):
         folder = self.get_argument('path', '', strip=False)
+        source = self.get_argument('source', 'xdg')
 
         status, body = await tornado.ioloop.IOLoop.current().run_in_executor(
-            None, collect_listing, folder
+            None, collect_source_listing, source, folder
         )
 
         if status is not None:
@@ -386,13 +555,7 @@ def delete_item(trash_path: str) -> tuple[int | None, dict]:
         return 404, {'error': 'Item not found in trash'}
 
     try:
-        if target.is_symlink():
-            # Symlinks should be unlinked, never rmtree'd
-            target.unlink()
-        elif target.is_dir():
-            shutil.rmtree(str(target))
-        else:
-            target.unlink()
+        remove_entry(target)
 
         # Only a top-level item has a trashinfo file of its own
         if '/' not in trash_path and info_file.exists():
@@ -427,9 +590,8 @@ class TrashDeleteHandler(APIHandler):
         self.finish(json.dumps(body))
 
 
-def empty_trash() -> tuple[int | None, dict]:
-    """Empty the whole trash. Returns the HTTP status and response body."""
-    trash_dir = get_trash_dir()
+def empty_source(trash_dir: Path) -> tuple[int, list[str]]:
+    """Delete every item in one trash directory. Returns the count and the errors."""
     files_dir = trash_dir / 'files'
     info_dir = trash_dir / 'info'
 
@@ -440,12 +602,7 @@ def empty_trash() -> tuple[int | None, dict]:
     if files_dir.exists():
         for entry in list(files_dir.iterdir()):
             try:
-                if entry.is_symlink():
-                    entry.unlink()
-                elif entry.is_dir():
-                    shutil.rmtree(str(entry))
-                else:
-                    entry.unlink()
+                remove_entry(entry)
                 deleted_count += 1
             except FileNotFoundError:
                 # A concurrent empty removed the entry first: it is gone either way
@@ -461,18 +618,108 @@ def empty_trash() -> tuple[int | None, dict]:
             except Exception:
                 pass
 
+    return deleted_count, errors
+
+
+def is_under(path: str, root: Path) -> bool:
+    """True when a recorded original path resolves at or below root."""
+    if not path:
+        return False
+    try:
+        Path(path).resolve().relative_to(root)
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def empty_workspace(trash_dir: Path, root: Path) -> tuple[int, int, list[str]]:
+    """Delete only workspace entries from one trash directory.
+
+    Returns the deleted count, the left count and the errors.
+    """
+    files_dir = trash_dir / 'files'
+    info_dir = trash_dir / 'info'
+
+    deleted_count = 0
+    left_count = 0
+    errors = []
+
+    if files_dir.exists():
+        for entry in list(files_dir.iterdir()):
+            info_file = info_dir / f"{entry.name}.trashinfo"
+            original_path = parse_trashinfo(info_file).get('original_path', '')
+            if not is_under(original_path, root):
+                left_count += 1
+                continue
+            try:
+                remove_entry(entry)
+            except FileNotFoundError:
+                # A concurrent delete removed the entry first: it is gone either way
+                continue
+            except Exception as e:
+                left_count += 1
+                errors.append(f"{entry.name}: {str(e)}")
+                continue
+            deleted_count += 1
+            try:
+                info_file.unlink()
+            except OSError:
+                pass
+
+    return deleted_count, left_count, errors
+
+
+def empty_trash(scope: str = 'xdg', workspace_root: str | None = None) -> tuple[int | None, dict]:
+    """Empty the trash for a scope. Returns the HTTP status and response body.
+
+    'xdg' keeps the single-trash response. 'all' empties every existing source
+    and 'workspace' deletes only each source's entries under the workspace root.
+    """
+    if scope == 'xdg':
+        deleted_count, errors = empty_source(get_trash_dir())
+        clear_dir_sizes()
+        if errors:
+            return None, {
+                'success': False,
+                'deleted_count': deleted_count,
+                'errors': errors
+            }
+        return None, {
+            'success': True,
+            'deleted_count': deleted_count
+        }
+
+    root = Path(workspace_root).resolve() if workspace_root else None
+    results = []
+    for source in existing_sources():
+        entry = {
+            'id': source['id'],
+            'label': source['label'],
+            'deleted_count': 0,
+            'errors': []
+        }
+        try:
+            if scope == 'all':
+                entry['deleted_count'], entry['errors'] = empty_source(source['directory'])
+            else:
+                deleted, left, errors = empty_workspace(source['directory'], root)
+                entry['deleted_count'] = deleted
+                entry['left_count'] = left
+                entry['errors'] = errors
+        except (PermissionError, OSError) as error:
+            entry['errors'] = [str(error)]
+        results.append(entry)
+
     clear_dir_sizes()
 
-    if errors:
-        return None, {
-            'success': False,
-            'deleted_count': deleted_count,
-            'errors': errors
-        }
-    return None, {
-        'success': True,
-        'deleted_count': deleted_count
+    body = {
+        'success': not any(entry['errors'] for entry in results),
+        'deleted_count': sum(entry['deleted_count'] for entry in results),
+        'sources': results
     }
+    if scope == 'workspace':
+        body['left_count'] = sum(entry['left_count'] for entry in results)
+    return None, body
 
 
 class TrashEmptyHandler(APIHandler):
@@ -480,8 +727,27 @@ class TrashEmptyHandler(APIHandler):
 
     @tornado.web.authenticated
     async def post(self):
+        data = json.loads(self.request.body) if self.request.body else {}
+        scope = data.get('scope', 'xdg')
+
+        if scope not in ('xdg', 'all', 'workspace'):
+            self.set_status(400)
+            self.finish(json.dumps({'error': f'Unknown scope: {scope}'}))
+            return
+
+        workspace_root = None
+        if scope == 'workspace':
+            workspace_root = self.settings.get('server_root_dir')
+            if not workspace_root:
+                contents_manager = self.settings.get('contents_manager')
+                workspace_root = getattr(contents_manager, 'root_dir', None)
+            if not workspace_root:
+                self.set_status(400)
+                self.finish(json.dumps({'error': 'Workspace root is unknown'}))
+                return
+
         status, body = await tornado.ioloop.IOLoop.current().run_in_executor(
-            None, empty_trash
+            None, empty_trash, scope, workspace_root
         )
 
         if status is not None:
@@ -496,6 +762,7 @@ def setup_route_handlers(web_app):
 
     handlers = [
         (url_path_join(base_route, "status"), TrashStatusHandler),
+        (url_path_join(base_route, "sources"), TrashSourcesHandler),
         (url_path_join(base_route, "list"), TrashListHandler),
         (url_path_join(base_route, "restore"), TrashRestoreHandler),
         (url_path_join(base_route, "delete"), TrashDeleteHandler),

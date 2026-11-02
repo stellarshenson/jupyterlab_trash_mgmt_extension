@@ -53,6 +53,21 @@ REST handlers under `jupyterlab-trash-mgmt-extension/`
   - log: 2026-10-28T20:44:26Z @kj Galata E2E (ui-tests/tests/trash-empty-performance.spec.ts): 10,000 seeded files in 4,000 entries, Empty Trash POST 3189 ms versus 3056 ms old, max /api/status latency 13.0 ms over 58 samples versus 2972.1 ms old (bar 1000 ms); fixed passes, old handler fails
   - log: 2026-10-28T20:48:50Z @kj regression-verify PASS: nested restore and nested delete at depth 2 show a fresh 5 B size (15 B to 5 B, matching a fresh walk); two concurrent empties both succeed (71 + 49 deleted, 0 files and 0 trashinfo left); a folder removed before listing returns 404 JSON, not 500; make test exit 0 (jest 49 passed, pytest 70 passed, auth gate green); list ping max 6.4 ms and empty ping max 4.3 ms against 200 ms (before 1215.1 and 1409.4 ms); Galata browser max /api/status 13.0 ms over 58 samples vs 2972.1 ms old (prove run 133.9 vs 3015.1 ms; bar 1000 ms); reason: the closing proof must quote the regression cases, test counts, bench and browser numbers
   - log: 2026-10-28T20:48:54Z @kj closed; reason: same numbers as the preceding log line
+- [x] `DEF-API-28-EMPTY-RETRY` **Empty Trash fails on a directory written during the walk** - MAJOR; shutil.rmtree raises [Errno 39] Directory not empty when another process writes into a trashed directory during the walk, and empty_trash reports the whole run as failed although every other entry was removed; `routes.py` empty_trash
+  - evidence: pytest 76 passed: TestRemoveTree covers the transient ENOTEMPTY retry, the bounded failure after 3 attempts, and the delete path through the shared helper
+  - repro: empty a trash holding a directory a running process still writes into; the panel shows Empty Trash Failed with [Errno 39] Directory not empty on that path
+  - test-tags: INTEGRATION
+  - log: 2026-11-01T13:07:27Z @kj added
+  - log: 2026-11-01T13:17:25Z @kj closed
+- [x] `DEF-API-29-DUPLICATE-SOURCE` **The current user's home trash is a second section for the same trash** - MEDIUM; With XDG_DATA_HOME unset the xdg source and home:<user> resolve to the same directory; the panel lists the same trash twice and Clean All Sources empties it twice
+  - evidence: pytest TestTrashSources::test_home_trash_resolving_to_the_xdg_trash_is_listed_once passes; pytest 83 passed on 2026-11-01; the same test fails with ['xdg', 'home:alice'] == ['xdg'] against the pre-fix existing_sources
+  - related: ACC-SCOPE-67-SOURCES
+  - repro: python3 -I -c "from jupyterlab_trash_mgmt_extension import routes as r; [print(c['id'], r.resolve_source(c)) for c in r.source_candidates()]" prints xdg and home:lab both /home/lab/.local/share/Trash
+  - test-tags: UNIT, INTEGRATION
+  - root-cause: 2026-11-01T15:12:23Z @kj source_candidates adds every /home/* directory and existing_sources never compares a candidate's resolved directory with the xdg trash
+  - log: 2026-11-01T15:12:23Z @kj added
+  - log: 2026-11-01T15:46:04Z @kj closed
+  - log: 2026-11-01T16:13:20Z @kj dedupe key changed from the resolved path to (st_dev, st_ino), because a bind mount aliases one directory under two paths that resolve differently; bwrap probe: fixed returns ['xdg'], the path key returns ['xdg', 'home:alice'], an unaliased home trash stays a source; pytest 83
 
 ## Trash side panel `PANEL`
 
@@ -152,6 +167,31 @@ Lumino widget in `src/widget.ts`
   - root-cause: 2026-10-28T22:21:19Z @kj the outline used the brand colour and the rule was not focus-scoped
   - log: 2026-10-28T22:21:19Z @kj added
   - log: 2026-10-28T22:21:22Z @kj closed
+- [x] `DEF-PANEL-25-BUSY-AT` **busy state invisible to assistive technology** - MINOR; the veil and the loading spinner carry no role, aria-live or aria-busy, so a screen-reader user meets an empty listbox named Trash items with no busy state and no announcement when rows arrive; `src/widget.ts`
+  - evidence: jest 76 passed: the veil carries role=status with a non-empty aria-label and the list has aria-busy true during a deferred load, false after; the veil label is operation-neutral
+  - repro: cold load with a slow list response and a screen reader attached; the panel announces nothing until the rows land
+  - test-tags: UNIT
+  - log: 2026-11-01T13:06:37Z @kj added
+  - log: 2026-11-01T13:17:25Z @kj closed
+  - log: 2026-11-01T14:00:04Z @kj edited evidence "jest 73 passed in 2 suites (widget.spec.ts asserts the veil carries role=status with a non-empty aria-label and the list has aria-busy true during a deferred load, false after); jlpm run lint:check exit 0" -> "jest 76 passed: the veil carries role=status with a non-empty aria-label and the list has aria-busy true during a deferred load, false after; the veil label is operation-neutral"
+  - log: 2026-11-01T14:47:02Z @kj jest count corrected to 78 after the review rounds added cases
+- [x] `DEF-PANEL-26-SORT-KEYS` **sortable column headers are mouse-only** - MINOR; the Name, Deleted and Size headers are spans with a click listener only - no focus, no key activation, no aria-sort; `src/widget.ts` _renderColumnHeader
+  - evidence: jest 76 passed: each column header is a BUTTON whose translated aria-label names the column and sort state, a click sorts, and focus returns to the same column across a rebuild
+  - repro: tab through the panel with a keyboard: focus never reaches a column header, so the list cannot be sorted without a mouse
+  - test-tags: UNIT
+  - log: 2026-11-01T13:06:37Z @kj added
+  - log: 2026-11-01T13:17:25Z @kj closed
+  - log: 2026-11-01T14:00:04Z @kj edited evidence "jest 73 passed: each column header is a BUTTON whose aria-label names the column and sort state, and a click still sorts; jlpm run lint:check exit 0" -> "jest 76 passed: each column header is a BUTTON whose translated aria-label names the column and sort state, a click sorts, and focus returns to the same column across a rebuild"
+  - log: 2026-11-01T14:47:02Z @kj jest count corrected to 78 after the review rounds added cases
+- [x] `DEF-PANEL-27-LIST-TIMEOUT` **a hung list request stops auto-refresh** - MEDIUM; requestAPI sets no timeout, _pendingLoads stays above zero, and _refreshInBackground returns early forever, so the list stays stale until a manual refresh or a reload; `src/request.ts`, `src/widget.ts`
+  - evidence: jest 76 passed: 'lets the background refresh through a pending load only when it is stale' and the busy-mark timeout case; a pending load older than STALE_LOAD_MS no longer blocks the background refresh, and the list request is never cancelled; pytest 76 passed
+  - repro: make the list endpoint hang once, then wait: the 10 s auto-refresh never lists again until the user clicks Refresh or reloads
+  - test-tags: UNIT
+  - log: 2026-11-01T13:06:37Z @kj added
+  - log: 2026-11-01T13:17:25Z @kj closed
+  - log: 2026-11-01T14:00:04Z @kj edited evidence "jest 73 passed incl. src/__tests__/request.spec.ts cases: requestAPI with timeoutMs rejects when the response never settles and a call without it passes no signal; only _fetchList passes 30000 ms, restore, delete and empty pass three arguments" -> "jest 76 passed: 'lets the background refresh through a pending load only when it is stale' and the busy-mark timeout case; a pending load older than STALE_LOAD_MS no longer blocks the background refresh, and the list request is never cancelled; pytest 76 passed"
+  - log: 2026-11-01T14:47:02Z @kj jest count corrected to 78 after the review rounds added cases
+  - log: 2026-11-01T15:46:07Z @kj review round 1 repaired the watchdog rather than removing it: per-load start map, newest-pending gate, chase retargeted at the newest requested folder, at most one chase in flight, last-rendered-sequence render guard; five new jest cases fail on the pre-fix widget, jest 92 passes
 
 ## Test suite `TEST`
 
@@ -213,4 +253,11 @@ Rotation of the refresh icon and of the loading ring
   - log: 2026-10-28T20:58:25Z @kj added; reason: reported by @kj on 2026-10-28 while emptying the large trash; paired with acceptance criterion ACC-MOTION-58-SPIN
   - log: 2026-10-28T20:58:29Z @kj fix in the working tree: the reduced-motion block now only dims; ui-tests/tests/spinner-motion.spec.ts asserts computed animation-name jp-trash-panel-spin under both motion preferences; the browser run fails today only because the installed labextension bundle predates the CSS fix (static/232.2e456271cee51023.js still carries animation: none), so the rebuild-and-reinstall workflow reruns it before the criterion closes; reason: state of the fix between filing and the rebuilt frontend
   - log: 2026-10-28T21:08:32Z @kj closed; reason: browser evidence from the rebuilt frontend
+- [x] `DEF-MOTION-24-STATIC-BUTTON` **refresh button turns with nothing running** - MEDIUM; the header refresh icon rotates although no load runs and the button was not clicked; owner requirement 2026-11-01: the button is static and only the loading ring turns; cause unknown; `src/widget.ts`, `style/base.css`
+  - evidence: jest widget.spec.ts 66 passed, 1 suite; Galata spinner-motion.spec.ts 2 passed 17.0s, HEADER_ANIMATION=none and LOADING_ANIMATION=jp-trash-panel-spin under both prefers-reduced-motion values; jlpm run lint:check exit 0
+  - root-cause: 2026-11-01T12:34:44Z @kj the class is set on every refresh() call, and refresh() also runs from onAfterShow with no click; the 500 ms floor keeps it turning after an empty list has rendered, and a list request with no answer leaves it on, requestAPI having no timeout
+  - repro: open the Trash panel on an empty trash and watch the header refresh icon without clicking
+  - test-tags: UNIT, E2E
+  - log: 2026-11-01T12:17:39Z @kj added
+  - log: 2026-11-01T12:34:47Z @kj closed
 

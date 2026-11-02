@@ -18,6 +18,8 @@ const trans = nullTranslator.load('jupyterlab_trash_mgmt_extension');
 namespace CommandIDs {
   export const refresh = 'trash:refresh';
   export const empty = 'trash:empty';
+  export const cleanAll = 'trash:clean-all';
+  export const cleanWorkspace = 'trash:clean-workspace';
 }
 
 /**
@@ -70,6 +72,30 @@ const plugin: JupyterFrontEndPlugin<void> = {
       execute: () => {
         // The widget handles the confirmation dialog internally
         (widget as any)._emptyTrash();
+      }
+    });
+
+    // Register clean all sources command
+    commands.addCommand(CommandIDs.cleanAll, {
+      label: trans.__('Clean All Sources'),
+      caption: trans.__('Permanently delete every item in every trash source'),
+      describedBy: { args: { type: 'object', properties: {} } },
+      execute: () => {
+        // The widget handles the confirmation dialog internally
+        (widget as any)._cleanSources('all');
+      }
+    });
+
+    // Register clean workspace command
+    commands.addCommand(CommandIDs.cleanWorkspace, {
+      label: trans.__('Clean Workspace'),
+      caption: trans.__(
+        'Permanently delete the trash entries under the workspace root'
+      ),
+      describedBy: { args: { type: 'object', properties: {} } },
+      execute: () => {
+        // The widget handles the confirmation dialog internally
+        (widget as any)._cleanSources('workspace');
       }
     });
   }

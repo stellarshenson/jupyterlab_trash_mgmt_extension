@@ -62,6 +62,7 @@ Title row, action icons and summary bar of the trash panel
 - [x] `ACC-HEAD-9` **Refresh icon turns for the whole refresh** - MEDIUM; after a refresh click the refresh icon rotates until the load ends, 500 ms at least
   - evidence: jest `refresh icon > turns until the load ends, 500 ms at least` and `keeps turning while a slow load is pending` pass; jest 49 passed on 2026-10-14
   - related: DEF-PANEL-2 - the early stop this criterion rules out
+  - overridden-by: ACC-MOTION-66-STATIC-REFRESH
   - test: click refresh with a list response that resolves at once, assert `jp-mod-spinning` is on the button at 400 ms and off at 600 ms
   - test-tags: UNIT
   - mechanism: 2026-10-13T21:21:25Z @kj header built once in the constructor, so the button that carries `jp-mod-spinning` is never replaced during a load
@@ -96,20 +97,24 @@ Translucent overlay with a ring spinner shown while the panel loads
   - test-tags: UNIT
   - log: 2026-10-13T21:21:25Z @kj added
   - log: 2026-10-13T23:27:13Z @kj closed
-- [x] `ACC-VEIL-14` **Edge: load fails** - MEDIUM; when a refresh fails the veil and the icon spin end and the dialog `Failed to load trash contents` opens
+- [x] `ACC-VEIL-14` **Edge: load fails** - MEDIUM; when a refresh fails the veil ends and the dialog `Failed to load trash contents` opens
   - evidence: jest `loading veil > comes down and reports the error when the first load fails` passes; jest 49 passed on 2026-10-14
   - test: reject the list request, assert the veil is hidden and `showErrorMessage` was called
   - test-tags: UNIT
   - log: 2026-10-13T21:21:25Z @kj added
   - log: 2026-10-13T23:27:13Z @kj closed
-- [x] `ACC-VEIL-55` **Refresh click keeps the list usable** - HIGH; a refresh click rotates the refresh icon and raises no veil; rows stay clickable during the load
-  - evidence: jest `loading veil > stays down on a refresh click after the first load` passes; in the browser the veil stayed hidden during a refresh click; jest 49 passed on 2026-10-14
+  - log: 2026-11-01T13:06:43Z @kj amended text "when a refresh fails the veil and the icon spin end and the dialog `Failed to load trash contents` opens" -> "MEDIUM; when a refresh fails the veil ends and the dialog `Failed to load trash contents` opens"
+- [x] `ACC-VEIL-55` **Refresh click keeps the list usable** - HIGH; a refresh click raises no veil; rows stay clickable during the load, and the button carries a static busy mark rather than a rotation
+  - evidence: jest 'refresh icon > stays static through a clicked refresh' (aria-busy true, jp-mod-busy present, no jp-mod-spinning) and 'loading veil > stays down on a refresh click after the first load' pass; in the browser the veil stayed hidden during a refresh click
   - overrides: ACC-VEIL-10 - user decision of 2026-10-13
-  - test: load once, click refresh with a pending request, assert the veil is hidden and the button has `jp-mod-spinning`
+  - test: load once, click refresh with a pending request, assert the veil is hidden, the button has aria-busy true and jp-mod-busy present and no jp-mod-spinning
   - test-tags: UNIT, MANUAL
   - mechanism: 2026-10-13T21:31:45Z @kj veil raised only while no list has been loaded yet, as `refresh()` of `jupyterlab_ai_code_assistants_extension` does
   - log: 2026-10-13T21:31:45Z @kj added
   - log: 2026-10-13T23:27:13Z @kj closed
+  - log: 2026-11-01T13:06:42Z @kj amended text "a refresh click rotates the refresh icon and raises no veil; rows stay clickable during the load" -> "HIGH; a refresh click raises no veil; rows stay clickable during the load, and the button carries a static busy mark rather than a rotation"
+  - log: 2026-11-01T13:53:52Z @kj edited test "load once, click refresh with a pending request, assert the veil is hidden and the button has `jp-mod-spinning`" -> "load once, click refresh with a pending request, assert the veil is hidden, the button has aria-busy true and jp-mod-busy present and no jp-mod-spinning"
+  - log: 2026-11-01T15:32:54Z @kj edited evidence "jest `loading veil > stays down on a refresh click after the first load` passes; in the browser the veil stayed hidden during a refresh click; jest 49 passed on 2026-10-14" -> "jest 'refresh icon > stays static through a clicked refresh' (aria-busy true, jp-mod-busy present, no jp-mod-spinning) and 'loading veil > stays down on a refresh click after the first load' pass; in the browser the veil stayed hidden during a refresh click"
 
 ## Folder navigation `NAV`
 
@@ -274,6 +279,7 @@ Entering a trashed folder and acting on the rows inside it
   - log: 2026-10-13T21:21:27Z @kj added
   - log: 2026-10-13T23:27:15Z @kj closed
 - [x] `ACC-NAV-56` **Load feedback on navigation** - LOW; entering a folder or clicking a breadcrumb segment rotates the refresh icon until that level is listed
+  - overridden-by: ACC-MOTION-66-STATIC-REFRESH
   - evidence: jest `folder navigation > turns the refresh icon while a folder loads` passes; jest 49 passed on 2026-10-14
   - test: enter a folder with a pending request, assert the button has `jp-mod-spinning` until it resolves
   - test-tags: UNIT
@@ -378,9 +384,12 @@ Makefile, project template, dependency versions and CI
 
 ## Spinner animation `MOTION`
 
-Rotation of the refresh icon and of the loading spinner
+Rotation of the loading ring; the header refresh button stays static and shows a static busy mark while a warm load runs
+
+- log: 2026-11-01T13:06:51Z @kj description "Rotation of the refresh icon and of the loading spinner" -> "Rotation of the loading ring; the header refresh button stays static and shows a static busy mark while a warm load runs"
 
 - [x] `ACC-MOTION-58-SPIN` **Spinners ignore reduced motion** - MEDIUM; both spinner animations keep rotating while the system prefers reduced motion
+  - overridden-by: ACC-MOTION-66-STATIC-REFRESH
   - evidence: Spec "in Galata with emulateMedia reducedMotion reduce, the computed animation-name of .jp-TrashPanel-loadingSpinner and of the spinning header svg is jp-trash-panel-spin" confirmed; computed animation-name readings: reduce header jp-trash-panel-spin, reduce loading jp-trash-panel-spin, no-preference header jp-trash-panel-spin, no-preference loading jp-trash-panel-spin; suite 4 passed, 0 failed
   - test: in Galata with emulateMedia reducedMotion reduce, the computed animation-name of .jp-TrashPanel-loadingSpinner and of the spinning header svg is jp-trash-panel-spin
   - test-tags: E2E, MANUAL
@@ -394,13 +403,28 @@ Rotation of the refresh icon and of the loading spinner
   - log: 2026-10-28T22:21:17Z @kj added; reason: the test hint must name every Galata and jest case covering the criterion
   - log: 2026-10-28T22:26:41Z @kj closed; reason: the evidence quotes the four jest case names and the Galata case name verbatim
   - log: 2026-10-30T08:18:53Z @kj rejected: rejected; evidence retired: jest reduced motion cases 'names the setting and offers the override under reduce', 'turns the override off and back on from the button', 'renders no control when reduce does not match', 'adds and drops the controls as the media query changes' pass; Galata spinner-motion 'force motion off stops both spinners and keeps the chip' passes; jest 66 passed, pytest 73 passed, Galata 5/5; reason: owner decision 2026-10-30: the motion controls are unnecessary; motion always runs and no control is rendered
-- [x] `ACC-MOTION-65-NO-CONTROL` **No motion control is rendered** - MEDIUM; the panel renders no reduced-motion chip and no force-motion toggle; both spinner animations keep rotating under every system preference
+- [x] `ACC-MOTION-65-NO-CONTROL` **No motion control is rendered** - MEDIUM; the panel renders no reduced-motion chip and no force-motion toggle; the loading ring keeps rotating under every system preference
   - evidence: jest 66 passed, 66 total, 1 suite passed (verify.json, exit 0); Galata 'prefers-reduced-motion: reduce > both spinners keep animation-name jp-trash-panel-spin' passed (4.0s) and 'prefers-reduced-motion: no-preference > both spinners keep animation-name jp-trash-panel-spin' passed (3.9s), 2 passed (14.0s), exit 0
   - related: ACC-MOTION-64-FORCE-MOTION
-  - test: jest widget.spec.ts 'renders no motion control under a reduce preference', 'renders no motion control without a reduce preference'; Galata spinner-motion.spec.ts 'prefers-reduced-motion: reduce > both spinners keep animation-name jp-trash-panel-spin', 'prefers-reduced-motion: no-preference > both spinners keep animation-name jp-trash-panel-spin'
+  - test: jest widget.spec.ts 'renders no motion control under a reduce preference', 'renders no motion control without a reduce preference'; Galata spinner-motion.spec.ts 'prefers-reduced-motion: reduce > keeps the loading ring turning and the header static', 'prefers-reduced-motion: no-preference > keeps the loading ring turning and the header static'
   - test-tags: UNIT, E2E
   - log: 2026-10-30T08:18:48Z @kj added
   - log: 2026-10-30T08:18:59Z @kj closed
+  - log: 2026-11-01T12:34:47Z @kj amended text "the panel renders no reduced-motion chip and no force-motion toggle; both spinner animations keep rotating under every system preference" -> "MEDIUM; the panel renders no reduced-motion chip and no force-motion toggle; the loading ring keeps rotating under every system preference"
+  - log: 2026-11-01T13:06:48Z @kj edited test "jest widget.spec.ts 'renders no motion control under a reduce preference', 'renders no motion control without a reduce preference'; Galata spinner-motion.spec.ts 'prefers-reduced-motion: reduce > both spinners keep animation-name jp-trash-panel-spin', 'prefers-reduced-motion: no-preference > both spinners keep animation-name jp-trash-panel-spin'" -> "jest widget.spec.ts 'renders no motion control under a reduce preference', 'renders no motion control without a reduce preference'; Galata spinner-motion.spec.ts 'prefers-reduced-motion: reduce > keeps the loading ring turning and the header static', 'prefers-reduced-motion: no-preference > keeps the loading ring turning and the header static'"
+- [x] `ACC-MOTION-66-STATIC-REFRESH` **Refresh button stays static** - HIGH; the header refresh button never turns, on load, on panel show or on click; the loading ring is the only turning busy signal
+  - evidence: jest 78 passed in 1 suite, including the focus-restore, busy-mark token, veil-lowering and stale-load watchdog cases; jlpm run lint:check exit 0; Galata suite 4 of 4 green on the rebuilt wheel
+  - related: DEF-MOTION-24-STATIC-BUTTON
+  - overrides: ACC-MOTION-58-SPIN
+  - related: ACC-MOTION-65-NO-CONTROL
+  - overrides: ACC-HEAD-9
+  - overrides: ACC-NAV-56
+  - test: jest widget.spec.ts asserts the refresh button carries no jp-mod-spinning after the initial load, after a click and after an auto-refresh tick; Galata spinner-motion.spec.ts asserts the header svg has animation-name none
+  - test-tags: UNIT, E2E
+  - log: 2026-11-01T12:17:42Z @kj added
+  - log: 2026-11-01T12:34:47Z @kj closed
+  - log: 2026-11-01T14:03:02Z @kj edited evidence "jest widget.spec.ts 66 passed, 1 suite; Galata spinner-motion.spec.ts 2 passed 17.0s: reduce HEADER_ANIMATION=none LOADING_ANIMATION=jp-trash-panel-spin, no-preference the same; jlpm run lint:check exit 0" -> "jest 76 passed in 1 suite, including the focus-restore and busy-mark timeout cases; Galata 4 of 4 passed on the rebuilt wheel: reduce HEADER_ANIMATION=none LOADING_ANIMATION=jp-trash-panel-spin, no-preference the same; jlpm run lint:check exit 0"
+  - log: 2026-11-01T14:47:01Z @kj edited evidence "jest 76 passed in 1 suite, including the focus-restore and busy-mark timeout cases; Galata 4 of 4 passed on the rebuilt wheel: reduce HEADER_ANIMATION=none LOADING_ANIMATION=jp-trash-panel-spin, no-preference the same; jlpm run lint:check exit 0" -> "jest 78 passed in 1 suite, including the focus-restore, busy-mark token, veil-lowering and stale-load watchdog cases; jlpm run lint:check exit 0; Galata suite 4 of 4 green on the rebuilt wheel"
 
 ## Keyboard `KEYS`
 
@@ -438,4 +462,70 @@ Operating the trash list without a mouse
   - test-tags: UNIT
   - log: 2026-10-28T21:02:55Z @kj added
   - log: 2026-10-28T22:29:58Z @kj closed
+
+## Trash sources and cleanup scope `SCOPE`
+
+Additional trash sources shown below the main list, their collapsible sections, and the difference between a global clean and a workspace cleanup
+
+- log: 2026-11-01T14:50:22Z @kj category created
+
+- [x] `ACC-SCOPE-67-SOURCES` **Every trash source is its own section** - HIGH; the panel shows the XDG trash as the main section, and below it one section for /home/cache and one for each home trash under /home/*/.local/share/Trash, in that order; a home trash that is the same directory as the XDG trash gets no section
+  - evidence: jest 'trash sources > renders the returned sources in order below the main list, absent ones omitted'; pytest TestTrashSources (absent cache, temporary home root, xdg/home alias); Galata 'renders one section per source, in server order, with its own count and size' in the serial 10 of 10 suite
+  - test: jest: stub the list response with three sources; assert the section order top to bottom is xdg, cache, home; Galata: open the panel and read the section headers
+  - test-tags: UNIT, E2E
+  - log: 2026-11-01T14:50:22Z @kj added
+  - log: 2026-11-01T15:12:27Z @kj edited text "the panel shows the XDG trash as the main section, and below it one section for /home/cache and one for each home trash under /home/*/.local/share/Trash, in that order" -> "HIGH; the panel shows the XDG trash as the main section, and below it one section for /home/cache and one for each home trash under /home/*/.local/share/Trash, in that order; a home trash that is the same directory as the XDG trash gets no section"; reason: the default environment makes the xdg trash and the current user's home trash the same directory; DEF-API-29
+  - log: 2026-11-01T17:13:11Z @kj closed
+- [x] `ACC-SCOPE-68-COLLAPSE` **Bottom sections collapse and stay collapsed** - HIGH; each extra source header is a button carrying aria-expanded and a caret, expanded by default; Enter or Space toggles it; a section the user collapsed stays collapsed across a reload, exactly as the sections of jupyterlab_ai_code_assistants_extension and jupyterlab_passkey_extension behave
+  - evidence: jest 'collapses on a header click, writes the key, and reloads collapsed' and 'toggles from the keyboard with Enter and Space'; Galata 'a header click collapses a section and the state survives a reload' and 'Enter and Space on a focused header toggle its section'
+  - test: jest: toggle the cache header, assert the body is hidden and aria-expanded false, then refresh and assert it stayed collapsed; Galata: collapse, reload, read aria-expanded
+  - test-tags: UNIT, E2E
+  - log: 2026-11-01T14:50:25Z @kj added
+  - log: 2026-11-01T14:50:35Z @kj amended text "each extra source header is a button carrying aria-expanded and a caret; Enter or Space toggles it; the collapsed state survives a reload, following loadExpanded and saveExpanded of jupyterlab_ai_code_assistants_extension" -> "HIGH; each extra source header is a button carrying aria-expanded and a caret, collapsed by default; Enter or Space toggles it; the collapsed state survives a reload, exactly as the sections of jupyterlab_ai_code_assistants_extension and jupyterlab_passkey_extension behave"
+  - log: 2026-11-01T15:09:42Z @kj edited text "each extra source header is a button carrying aria-expanded and a caret, collapsed by default; Enter or Space toggles it; the collapsed state survives a reload, exactly as the sections of jupyterlab_ai_code_assistants_extension and jupyterlab_passkey_extension behave" -> "**Bottom sections collapse and stay collapsed** - HIGH; each extra source header is a button carrying aria-expanded and a caret, expanded by default; Enter or Space toggles it; a section the user collapsed stays collapsed across a reload, exactly as the sections of jupyterlab_ai_code_assistants_extension and jupyterlab_passkey_extension behave"; reason: recorded body, only the default state changes to match the Passkey reference the criterion names
+  - log: 2026-11-01T15:09:53Z @kj edited text "**Bottom sections collapse and stay collapsed** - HIGH; each extra source header is a button carrying aria-expanded and a caret, expanded by default; Enter or Space toggles it; a section the user collapsed stays collapsed across a reload, exactly as the sections of jupyterlab_ai_code_assistants_extension and jupyterlab_passkey_extension behave" -> "HIGH; each extra source header is a button carrying aria-expanded and a caret, expanded by default; Enter or Space toggles it; a section the user collapsed stays collapsed across a reload, exactly as the sections of jupyterlab_ai_code_assistants_extension and jupyterlab_passkey_extension behave"; reason: body only; the previous edit repeated the title
+  - log: 2026-11-01T17:13:11Z @kj closed
+- [x] `ACC-SCOPE-69-COUNTS` **A collapsed section still reports its size** - MEDIUM; each source header shows that source's item count and total size, so a collapsed section can be judged without opening it
+  - evidence: jest 'reports each source count and size in its header' asserts '/home/cache (12 items, 40 MB)' and the collapse case re-reads it after collapse and after reload; Galata asserts '/home/cache (2 items, 1.2 MB)' while expanded and while collapsed
+  - test: jest: render two sources with known counts; assert both headers carry their own count and size
+  - test-tags: UNIT
+  - log: 2026-11-01T14:50:26Z @kj added
+  - log: 2026-11-01T17:13:11Z @kj closed
+- [x] `ACC-SCOPE-70-GLOBAL-CLEAN` **Global clean empties every source** - HIGH; a Clean All Sources command empties the XDG trash, the cache and every home trash; its confirmation dialog names the scope and lists the count and size of each source
+  - evidence: pytest TestEmptyScopes::test_scope_all_counts_each_source_and_survives_a_failure; jest 'posts scope all from the clean-all dialog after naming every source'
+  - test: pytest: the endpoint reports a per-source count and a source it could not empty; jest: the dialog names every source with its count
+  - test-tags: INTEGRATION, UNIT
+  - log: 2026-11-01T14:50:26Z @kj added
+  - log: 2026-11-01T17:13:16Z @kj closed
+- [x] `ACC-SCOPE-71-SECTION-PARITY` **Sections copy the sibling panels** - HIGH; the section header, caret, row height, inset and tokens are copied from the sections of jupyterlab_ai_code_assistants_extension and jupyterlab_passkey_extension, not invented, and every band spans the panel edge to edge
+  - evidence: style/base.css .jp-TrashPanel-sectionHeader carries the Passkey values (band, padding, tracking, weight, 14 px caret, hover, focus ring); Galata at a 500 px panel measures the 40 percent cap: sections 200 px, list 217 px
+  - test: Galata: read the computed padding, height and background of .jp-TrashPanel-sectionHeader and the sibling .jp-AiAssistantsPanel-sectionHeader and .jp-PasskeyVaultPanel-sectionHeader; assert they match
+  - test-tags: E2E, MANUAL
+  - log: 2026-11-01T14:50:35Z @kj added
+  - log: 2026-11-01T17:13:16Z @kj closed
+- [x] `ACC-SCOPE-72-WORKSPACE-CLEAN` **Workspace clean removes only workspace entries** - HIGH; a Clean Workspace command removes only entries whose original path lies under the current workspace root, leaves every other entry, reports how many it left, and never touches the cache or a home trash outside the workspace
+  - evidence: pytest TestEmptyScopes::test_scope_workspace_removes_only_entries_under_the_root; jest 'names the workspace root and posts scope workspace'
+  - test: pytest: seed entries from inside and outside the workspace root, run the workspace clean, assert only the inside entries are gone and the outside count is reported
+  - test-tags: INTEGRATION
+  - log: 2026-11-01T14:50:35Z @kj added
+  - log: 2026-11-01T17:13:16Z @kj closed
+- [x] `ACC-SCOPE-73-ABSENT-SOURCE` **An absent source is not a section** - MEDIUM; a source whose directory does not exist renders no section; a source that exists but cannot be read renders its section with the error in the header and no rows
+  - evidence: jest 'renders no section for an absent source and an error header for an unreadable one' and 'renders the error in the header when a section listing fails'; pytest TestTrashSources::test_absent_cache_is_not_a_source; Galata asserts no home:bob section
+  - test: jest: with /home/cache missing assert no cache section; with a read error assert the header carries the error text
+  - test-tags: UNIT
+  - log: 2026-11-01T14:50:39Z @kj added
+  - log: 2026-11-01T17:13:16Z @kj closed
+- [x] `ACC-SCOPE-74-STREAM` **Sections render as each source answers** - MEDIUM; the panel lists sources independently, so a slow home trash does not hold back the XDG trash or the cache; each section renders as soon as its own listing answers
+  - evidence: jest 'renders the main list and the cache section while a home listing is held'; Galata 'a held source listing does not hold back another section' awaits the route match before asserting the cache rows
+  - test: jest: hold the home-trash response pending and assert the xdg and cache sections render before it resolves; Galata: the main section shows while a slow source is pending
+  - test-tags: UNIT, E2E
+  - log: 2026-11-01T14:50:39Z @kj added
+  - log: 2026-11-01T17:13:16Z @kj closed
+- [x] `ACC-SCOPE-75-STATIC-HEADERS` **Section headers carry no motion** - LOW; the caret flips without a transition and the refresh button stays static, extending ACC-MOTION-66 to the new section headers
+  - evidence: jest 'carries no animation on the section header or caret'; Galata 'the section header and caret carry no motion' (animationName none, transitionDuration 0s) and spinner-motion reports BUSY_RING_ANIMATION=none and HEADER_ANIMATION=none
+  - related: ACC-MOTION-66-STATIC-REFRESH
+  - test: Galata: assert the section caret and the refresh button compute animation-name none
+  - test-tags: E2E
+  - log: 2026-11-01T14:50:39Z @kj added
+  - log: 2026-11-01T17:13:16Z @kj closed
 

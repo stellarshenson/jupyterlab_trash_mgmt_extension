@@ -88,6 +88,8 @@ const command = useBwrap
 
 module.exports = {
   ...baseConfig,
+  // One Jupyter server and one seeded trash are shared, so parallel spec files make the empty-trash latency measurement depend on what else is running.
+  workers: 1,
   use: {
     ...baseConfig.use,
     baseURL: BASE_URL

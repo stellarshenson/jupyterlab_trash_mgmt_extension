@@ -19,10 +19,12 @@ A dedicated left panel for managing your JupyterLab trash. See what's taking up 
 
 - **Trash panel in sidebar** - Accessible alongside file browser, kernels, git, and extensions panels
 - **Storage usage display** - See how much space deleted files occupy
+- **Every trash source** - The XDG trash stays the main list, and `/home/cache` and every user's home trash appear below it as collapsible sections with their own item count and size
+- **Range of the clean** - Clean All Sources empties every source; Clean Workspace removes only entries whose original path lies under the workspace
 - **Individual item management** - Remove or restore specific files from trash
 - **Folder navigation** - Open a trashed folder and restore or remove single items inside it
 - **Keyboard control** - Tab to the list, move with the arrow keys, select with Space, open a folder with Enter and reach Restore and Delete with Shift+F10
-- **Animated status** - the refresh icon and the loading ring always turn, whatever the system's reduced-motion setting
+- **Motion that carries meaning** - the loading ring keeps turning under every system preference, while the refresh button stays static
 - **Large trash** - Emptying tens of thousands of items no longer blocks the rest of the lab
 - **Empty bin** - Clear all deleted files at once
 - **Server-side integration** - Python backend for reliable trash operations

@@ -1,5 +1,6 @@
 import { Widget } from '@lumino/widgets';
 import { showDialog, Dialog, showErrorMessage } from '@jupyterlab/apputils';
+import { PageConfig } from '@jupyterlab/coreutils';
 import { nullTranslator } from '@jupyterlab/translation';
 import { Menu } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
@@ -12,6 +13,36 @@ const trans = nullTranslator.load('jupyterlab_trash_mgmt_extension');
 
 // Auto-refresh interval: 1/6 minute = 10 seconds
 const REFRESH_INTERVAL_MS = 10000;
+
+// The localStorage key of the sources the user collapsed in the extra sections
+const COLLAPSED_KEY =
+  '@stellarshenson/jupyterlab-trash-mgmt-extension:panel:collapsed';
+
+function loadCollapsed(): Set<string> {
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(COLLAPSED_KEY) ?? '[]'
+    );
+    return new Set(
+      Array.isArray(parsed) ? parsed.filter(v => typeof v === 'string') : []
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCollapsed(collapsed: Set<string>): void {
+  try {
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsed]));
+  } catch {
+    // Storage blocked or full: the state lasts until the page reloads.
+  }
+}
+
+// A load pending longer than this no longer blocks the auto-refresh, so a
+// hung server cannot stop the list from updating. Its response is discarded
+// by the sequence number when it finally arrives.
+const STALE_LOAD_MS = 120000;
 
 interface ITrashItem {
   name: string;
@@ -29,6 +60,39 @@ interface ITrashListResponse {
   total_size: number;
   total_size_formatted: string;
   item_count: number;
+}
+
+interface ITrashSource {
+  id: string;
+  label: string;
+  item_count: number;
+  total_size: string;
+  error: string;
+}
+
+interface ICleanSourceResult {
+  id: string;
+  label: string;
+  deleted_count: number;
+  errors: string[];
+  left_count?: number;
+}
+
+interface ICleanResponse {
+  success: boolean;
+  deleted_count: number;
+  sources?: ICleanSourceResult[];
+  left_count?: number;
+  errors?: string[];
+}
+
+/** The elements of one extra source section. */
+interface ISectionParts {
+  section: HTMLDivElement;
+  header: HTMLButtonElement;
+  caret: HTMLSpanElement;
+  label: HTMLSpanElement;
+  list: HTMLDivElement;
 }
 
 type SortColumn = 'name' | 'modified' | 'size';
@@ -66,11 +130,33 @@ export class TrashWidget extends Widget {
   private _path: string[] = [];
   // False until the first list has arrived
   private _loaded = false;
-  // List requests in flight, and the sequence number of the newest one
+  // List requests in flight, the sequence number of the newest one, when each
+  // pending one started, and the sequence number of the last one rendered
   private _pendingLoads = 0;
   private _loadSeq = 0;
-  // Refreshes that currently keep the refresh icon turning
-  private _spinCount = 0;
+  private _loadStarts = new Map<number, number>();
+  private _renderedSeq = 0;
+  // The folder the newest request asked for, so the background chase retries
+  // the pending location rather than the one under it
+  private _requestPath: string[] = [];
+  // Tokens of the warm refreshes in flight; each keeps the button marked busy
+  // until it settles
+  private _warmTokens: Set<symbol> = new Set();
+  // Bounds the busy mark so a warm refresh that never returns cannot leave
+  // the button marked busy; the request itself is not cancelled
+  private _warmMarkTimer: ReturnType<typeof setTimeout> | null = null;
+  // The extra trash sources, one collapsible section each, below the main list
+  private _sectionsEl: HTMLDivElement;
+  private _sources: ITrashSource[] = [];
+  private _sectionParts: Map<string, ISectionParts> = new Map();
+  // What each section's own listing request returned, or the error it raised
+  private _sectionListings: Map<string, ITrashListResponse | Error> = new Map();
+  // Sections whose listing request is in flight, or answered, for this load
+  private _sectionPending: Set<string> = new Set();
+  private _sectionFetched: Set<string> = new Set();
+  // Bumped on every sources answer, so an older listing answer is ignored
+  private _sectionGen = 0;
+  private _collapsed = loadCollapsed();
 
   constructor(serverSettings: ServerConnection.ISettings) {
     super();
@@ -98,8 +184,7 @@ export class TrashWidget extends Widget {
       this._focusListOrRefresh();
     });
 
-    // Create header: title on the left, action icons on the right. It is
-    // built once, so the refresh button keeps its spinning state across loads.
+    // Create header: title on the left, action icons on the right.
     this._header = document.createElement('div');
     this._header.className = 'jp-TrashPanel-header';
 
@@ -167,9 +252,17 @@ export class TrashWidget extends Widget {
     this._emptyMessage.style.display = 'none';
     this.node.appendChild(this._emptyMessage);
 
+    // Extra sources, below the main list: one collapsible section each
+    this._sectionsEl = document.createElement('div');
+    this._sectionsEl.className = 'jp-TrashPanel-sections';
+    this.node.appendChild(this._sectionsEl);
+
     // Create loading veil - visible by default, until the first load ends
     this._loadingVeil = document.createElement('div');
     this._loadingVeil.className = 'jp-TrashPanel-loading';
+    this._loadingVeil.setAttribute('role', 'status');
+    this._loadingVeil.setAttribute('aria-live', 'polite');
+    this._loadingVeil.setAttribute('aria-label', trans.__('Working'));
     const loadingSpinner = document.createElement('div');
     loadingSpinner.className = 'jp-TrashPanel-loadingSpinner';
     this._loadingVeil.appendChild(loadingSpinner);
@@ -213,6 +306,22 @@ export class TrashWidget extends Widget {
         }
       }
     });
+
+    this._commands.addCommand('trash:clean-all', {
+      describedBy: { args: { type: 'object', properties: {} } },
+      label: trans.__('Clean All Sources'),
+      execute: () => {
+        void this._cleanSources('all');
+      }
+    });
+
+    this._commands.addCommand('trash:clean-workspace', {
+      describedBy: { args: { type: 'object', properties: {} } },
+      label: trans.__('Clean Workspace'),
+      execute: () => {
+        void this._cleanSources('workspace');
+      }
+    });
   }
 
   /**
@@ -221,31 +330,35 @@ export class TrashWidget extends Widget {
    */
   async refresh(path: string[] = this._path): Promise<void> {
     // The veil covers the whole panel, header included, so it is raised only
-    // while there is no list to show yet; a later refresh turns the icon alone.
+    // while there is no list to show yet.
     const cold = !this._loaded;
+    let token: symbol | null = null;
     if (cold) {
       this._setLoading(true);
+    } else {
+      // A static ring marks the button while the warm load runs
+      token = Symbol();
+      this._warmTokens.add(token);
+      if (this._warmTokens.size === 1) {
+        this._setWarmMark(true);
+      }
     }
-    this._setRefreshSpinning(true);
-    const minSpin = new Promise<void>(resolve =>
-      window.setTimeout(resolve, 500)
-    );
     try {
-      await Promise.all([this._loadTrashContents(path), minSpin]);
+      await this._loadTrashContents(path);
     } catch (error) {
       console.error('Failed to load trash:', error);
       showErrorMessage('Trash Error', 'Failed to load trash contents');
     } finally {
-      this._setRefreshSpinning(false);
       if (cold) {
         this._setLoading(false);
+      } else if (token !== null) {
+        // Remove only this refresh's token; a newer refresh keeps its own
+        this._warmTokens.delete(token);
+        if (this._warmTokens.size === 0) {
+          this._setWarmMark(false);
+        }
       }
     }
-  }
-
-  private _setRefreshSpinning(on: boolean): void {
-    this._spinCount += on ? 1 : -1;
-    this._refreshBtn.classList.toggle('jp-mod-spinning', this._spinCount > 0);
   }
 
   private _setLoading(on: boolean): void {
@@ -253,11 +366,49 @@ export class TrashWidget extends Widget {
   }
 
   /**
-   * Background refresh without veil or icon spin - used for auto-refresh.
+   * Show or hide the busy mark on the refresh button. The mark follows the
+   * set of pending warm-refresh tokens; the timer armed when the first token
+   * arrives clears the whole set and the mark after STALE_LOAD_MS, so a
+   * refresh that never returns cannot leave the button marked busy. The
+   * request itself is not cancelled.
+   */
+  private _setWarmMark(on: boolean): void {
+    if (this._warmMarkTimer !== null) {
+      clearTimeout(this._warmMarkTimer);
+      this._warmMarkTimer = null;
+    }
+    this._refreshBtn.setAttribute('aria-busy', String(on));
+    this._refreshBtn.classList.toggle('jp-mod-busy', on);
+    if (on) {
+      this._warmMarkTimer = setTimeout(() => {
+        this._warmMarkTimer = null;
+        // A refresh that never returns must not keep the mark on
+        this._warmTokens.clear();
+        this._setWarmMark(false);
+      }, STALE_LOAD_MS);
+    }
+  }
+
+  /**
+   * Background refresh without the veil - used for auto-refresh.
    */
   private async _refreshInBackground(): Promise<void> {
-    // A load in flight already carries the newest location; do not race it
     if (this._pendingLoads > 0) {
+      // A load in flight already carries the newest location; do not race it
+      // until it has hung past the stale threshold. The newest pending start
+      // decides, so a settled load's age can no longer fire this.
+      const starts = [...this._loadStarts.values()];
+      const newest = starts[starts.length - 1];
+      if (Date.now() - newest < STALE_LOAD_MS) {
+        return;
+      }
+      // The pending load is stale. Chase the folder the newest request asked
+      // for, so a pending folder open is retried.
+      try {
+        await this._loadTrashContents(this._requestPath);
+      } catch (error) {
+        console.error('Failed to load trash:', error);
+      }
       return;
     }
     try {
@@ -297,18 +448,40 @@ export class TrashWidget extends Widget {
    */
   private async _loadTrashContents(path: string[] = this._path): Promise<void> {
     const seq = ++this._loadSeq;
+    this._requestPath = [...path];
+    // Each pending load keeps its own start, so a settled load drops out of
+    // the stale measure instead of carrying its age into the next one.
+    this._loadStarts.set(seq, Date.now());
     const target = [...path];
     let data: ITrashListResponse;
     this._pendingLoads++;
+    this._list.setAttribute('aria-busy', 'true');
+    // Sources load alongside the listing; their sections never hold it back
+    void this._loadSources(seq);
     try {
       data = await this._fetchList(target);
     } finally {
+      // The newest load owns the mark: when it ends, the list shown is final
+      // even while an older request is still pending.
+      if (seq === this._loadSeq) {
+        this._list.setAttribute('aria-busy', 'false');
+      }
       this._pendingLoads--;
+      this._loadStarts.delete(seq);
     }
-    // A newer load has started since; its result is the one to show
-    if (seq !== this._loadSeq) {
+    // A load older than the one already shown is stale; a load older than a
+    // newer request still renders when it answers the newest requested
+    // location, which is the chased folder a pending open is waiting for.
+    if (seq < this._renderedSeq) {
       return;
     }
+    if (
+      seq < this._loadSeq &&
+      target.join('/') !== this._requestPath.join('/')
+    ) {
+      return;
+    }
+    this._renderedSeq = seq;
 
     // The selection and the shift-click anchor are kept by trash path while
     // the location stays the same; a move to another folder clears both.
@@ -318,8 +491,14 @@ export class TrashWidget extends Widget {
     );
     const anchor = sameLocation ? this._lastClickedAnchor : null;
 
+    // The first successful render lowers the veil however the load started; a
+    // cold refresh whose request hangs never reaches its own finally.
+    const firstRender = !this._loaded;
     this._path = target;
     this._loaded = true;
+    if (firstRender) {
+      this._setLoading(false);
+    }
     this._items = data.items;
     this._selectedItems = new Set(
       this._items.filter(item => selected.has(item.trash_path))
@@ -345,6 +524,205 @@ export class TrashWidget extends Widget {
     this._summaryText.textContent = `${count} ${noun} \u00B7 ${data.total_size_formatted}`;
     // Inside a folder the trash holds at least that folder
     this._emptyBtn.hidden = this._path.length === 0 && count === 0;
+  }
+
+  /**
+   * Fetch the source list for a load and draw its sections. The main listing
+   * does not wait for this request.
+   */
+  private async _loadSources(seq: number): Promise<void> {
+    let sources: ITrashSource[];
+    try {
+      sources = await requestAPI<ITrashSource[]>(
+        'sources',
+        this._serverSettings
+      );
+    } catch (error) {
+      console.warn('Failed to load trash sources:', error);
+      return;
+    }
+    // A newer load has started since; its source list is the one to show
+    if (seq !== this._loadSeq) {
+      return;
+    }
+    this._sources = sources;
+    // Every load refreshes each section's own listing
+    this._sectionGen++;
+    this._sectionPending.clear();
+    this._sectionFetched.clear();
+    this._renderSections();
+  }
+
+  /** Rebuild the sections of the sources the server returned, in its order. */
+  private _renderSections(): void {
+    // The rebuild replaces every header; the focused one takes the focus back
+    const active = document.activeElement as HTMLElement | null;
+    const focusedId = active?.closest<HTMLElement>('.jp-TrashPanel-section')
+      ?.dataset.source;
+    this._sectionParts.clear();
+    this._sectionsEl.innerHTML = '';
+    for (const source of this._sources) {
+      // The xdg trash stays the main section above
+      if (source.id === 'xdg') {
+        continue;
+      }
+      const parts = this._createSection(source);
+      this._sectionParts.set(source.id, parts);
+      this._sectionsEl.appendChild(parts.section);
+      this._paintSection(source, parts);
+    }
+    if (focusedId !== undefined) {
+      this._sectionParts.get(focusedId)?.header.focus();
+    }
+  }
+
+  private _createSection(source: ITrashSource): ISectionParts {
+    const section = document.createElement('div');
+    section.className = 'jp-TrashPanel-section';
+    section.dataset.source = source.id;
+
+    // A native button takes the focus and the Enter / Space activation
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'jp-TrashPanel-sectionHeader';
+
+    const caret = document.createElement('span');
+    caret.className = 'jp-TrashPanel-caret';
+    // Decorative: the state it draws is already on aria-expanded
+    caret.setAttribute('aria-hidden', 'true');
+
+    const label = document.createElement('span');
+    label.className = 'jp-TrashPanel-sectionLabel';
+
+    header.append(caret, label);
+    header.addEventListener('click', () => this._toggleSection(source.id));
+    header.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' && e.key !== ' ') {
+        return;
+      }
+      // preventDefault stops the native click, so the toggle runs once
+      e.preventDefault();
+      this._toggleSection(source.id);
+    });
+
+    const list = document.createElement('div');
+    list.className = 'jp-TrashPanel-sectionList';
+
+    section.append(header, list);
+    return { section, header, caret, label, list };
+  }
+
+  private _toggleSection(id: string): void {
+    if (!this._collapsed.delete(id)) {
+      this._collapsed.add(id);
+    }
+    saveCollapsed(this._collapsed);
+    const parts = this._sectionParts.get(id);
+    const source = this._sources.find(item => item.id === id);
+    if (parts !== undefined && source !== undefined) {
+      this._paintSection(source, parts);
+    }
+  }
+
+  /**
+   * Draw one section from the source list and its own listing. The header
+   * always carries the source's count and size, so a collapsed section still
+   * reports what it holds.
+   */
+  private _paintSection(source: ITrashSource, parts: ISectionParts): void {
+    const expanded = !this._collapsed.has(source.id);
+    parts.header.setAttribute('aria-expanded', String(expanded));
+    parts.caret.textContent = expanded ? '▾' : '▸';
+    parts.list.hidden = !expanded;
+
+    const cached = this._sectionListings.get(source.id);
+    const error =
+      source.error || (cached instanceof Error ? cached.message : '');
+    if (error) {
+      parts.label.textContent = trans.__('%1: %2', source.label, error);
+      parts.list.innerHTML = '';
+      return;
+    }
+    parts.label.textContent = this._sourceSummary(source);
+    if (!expanded) {
+      return;
+    }
+
+    // Each expanded source lists on its own; a pending answer is not asked again
+    void this._loadSectionList(source);
+    if (cached === undefined || cached instanceof Error) {
+      return;
+    }
+    parts.list.innerHTML = '';
+    for (const item of cached.items) {
+      parts.list.appendChild(this._sectionRow(item));
+    }
+  }
+
+  /**
+   * Fetch one source's listing. The section renders as soon as this answer
+   * arrives, whatever the other sources are doing.
+   */
+  private async _loadSectionList(source: ITrashSource): Promise<void> {
+    const id = source.id;
+    if (this._sectionPending.has(id) || this._sectionFetched.has(id)) {
+      return;
+    }
+    this._sectionPending.add(id);
+    const gen = this._sectionGen;
+    let result: ITrashListResponse | Error;
+    try {
+      result = await requestAPI<ITrashListResponse>(
+        `list?source=${encodeURIComponent(id)}`,
+        this._serverSettings
+      );
+    } catch (error: any) {
+      result =
+        error instanceof Error ? error : new Error(String(error?.message));
+    }
+    if (gen !== this._sectionGen) {
+      return;
+    }
+    this._sectionPending.delete(id);
+    this._sectionFetched.add(id);
+    this._sectionListings.set(id, result);
+    const parts = this._sectionParts.get(id);
+    const current = this._sources.find(item => item.id === id);
+    if (parts !== undefined && current !== undefined) {
+      this._paintSection(current, parts);
+    }
+  }
+
+  private _sectionRow(item: ITrashItem): HTMLDivElement {
+    const row = document.createElement('div');
+    row.className = 'jp-TrashPanel-sectionRow';
+
+    const name = document.createElement('span');
+    name.className = 'jp-TrashPanel-sectionName';
+    name.textContent = item.name;
+
+    const age = document.createElement('span');
+    age.className = 'jp-TrashPanel-sectionAge';
+    age.textContent = this._formatRelativeTime(item.deletion_date);
+
+    const size = document.createElement('span');
+    size.className = 'jp-TrashPanel-sectionSize';
+    size.textContent = item.size_formatted;
+
+    row.append(name, age, size);
+    return row;
+  }
+
+  /** A source's label with its count and size, as the header shows it. */
+  private _sourceSummary(source: ITrashSource): string {
+    const noun = source.item_count === 1 ? trans.__('item') : trans.__('items');
+    return trans.__(
+      '%1 (%2 %3, %4)',
+      source.label,
+      source.item_count,
+      noun,
+      source.total_size
+    );
   }
 
   /**
@@ -412,6 +790,13 @@ export class TrashWidget extends Widget {
   }
 
   private _renderColumnHeader(): void {
+    // The rebuild replaces the buttons; remember which one held the focus by
+    // its position so the focus returns to the same column.
+    const focused = Array.from(
+      this._columnHeader.querySelectorAll<HTMLElement>(
+        '.jp-TrashPanel-sortable'
+      )
+    ).indexOf(document.activeElement as HTMLElement);
     this._columnHeader.innerHTML = '';
 
     const createHeader = (
@@ -419,9 +804,21 @@ export class TrashWidget extends Widget {
       column: SortColumn,
       className: string
     ) => {
-      const header = document.createElement('span');
+      // A native button carries focus and Enter/Space activation itself
+      const header = document.createElement('button');
+      header.type = 'button';
       header.className = `${className} jp-TrashPanel-sortable`;
       header.textContent = label;
+      header.setAttribute(
+        'aria-label',
+        `${label}, ${
+          this._sortColumn === column
+            ? this._sortDirection === 'asc'
+              ? trans.__('sorted ascending')
+              : trans.__('sorted descending')
+            : trans.__('not sorted')
+        }`
+      );
 
       if (this._sortColumn === column) {
         const arrow = document.createElement('span');
@@ -444,6 +841,12 @@ export class TrashWidget extends Widget {
     this._columnHeader.appendChild(
       createHeader('Size', 'size', 'jp-TrashPanel-col-size')
     );
+
+    if (focused >= 0) {
+      this._columnHeader
+        .querySelectorAll<HTMLButtonElement>('.jp-TrashPanel-sortable')
+        [focused].focus();
+    }
   }
 
   private _handleSort(column: SortColumn): void {
@@ -492,11 +895,14 @@ export class TrashWidget extends Widget {
           ? trans.__('Folder is empty')
           : trans.__('Trash is empty');
       this._emptyMessage.style.display = 'flex';
-      this._columnHeader.style.display = 'none';
       // A hidden element cannot hold the focus; hand it to the header
-      if (document.activeElement === this._list) {
+      if (
+        document.activeElement === this._list ||
+        this._columnHeader.contains(document.activeElement)
+      ) {
         this._refreshBtn.focus();
       }
+      this._columnHeader.style.display = 'none';
       this._list.style.display = 'none';
       this._sortedItems = [];
       this._restoreActiveRow();
@@ -952,7 +1358,10 @@ export class TrashWidget extends Widget {
           success: boolean;
           deleted_count: number;
           errors?: string[];
-        }>('empty', this._serverSettings, { method: 'POST' });
+        }>('empty', this._serverSettings, {
+          method: 'POST',
+          body: JSON.stringify({ scope: 'xdg' })
+        });
         await this._loadTrashContents();
         if (!result.success) {
           showErrorMessage(
@@ -967,6 +1376,109 @@ export class TrashWidget extends Widget {
         this._setLoading(false);
       }
     }
+  }
+
+  /**
+   * Empty every source, or only the entries under the workspace root. The
+   * confirmation names the scope and every source's count and size, and the
+   * request is sent only after it is accepted.
+   */
+  private async _cleanSources(scope: 'all' | 'workspace'): Promise<void> {
+    const sources = await this._sourcesForDialog();
+    const root = PageConfig.getOption('serverRoot');
+    const title =
+      scope === 'all'
+        ? trans.__('Clean All Sources')
+        : trans.__('Clean Workspace');
+    const warning =
+      scope === 'all'
+        ? trans.__(
+            'Every item in every trash source will be permanently deleted. This cannot be undone.'
+          )
+        : trans.__(
+            'Only entries under %1 are removed, from every trash source. Every other entry stays.',
+            root
+          );
+    const result = await showDialog({
+      title,
+      body: [
+        warning,
+        '',
+        ...sources.map(source => this._sourceSummary(source))
+      ].join('\n'),
+      buttons: [Dialog.cancelButton(), Dialog.warnButton({ label: title })]
+    });
+    if (!result.button.accept) {
+      return;
+    }
+
+    this._setLoading(true);
+    try {
+      const response = await requestAPI<ICleanResponse>(
+        'empty',
+        this._serverSettings,
+        { method: 'POST', body: JSON.stringify({ scope }) }
+      );
+      await this._loadTrashContents();
+      await this._reportClean(response, scope);
+    } catch (error: any) {
+      showErrorMessage(
+        trans.__('%1 Failed', title),
+        error?.message || trans.__('Failed to clean the trash')
+      );
+    } finally {
+      this._setLoading(false);
+    }
+  }
+
+  /** The sources for the confirmation dialog, as fresh as the server allows. */
+  private async _sourcesForDialog(): Promise<ITrashSource[]> {
+    try {
+      return await requestAPI<ITrashSource[]>('sources', this._serverSettings);
+    } catch {
+      return this._sources;
+    }
+  }
+
+  /** Report what each source deleted and how many entries the run left. */
+  private async _reportClean(
+    result: ICleanResponse,
+    scope: 'all' | 'workspace'
+  ): Promise<void> {
+    const entries = result.sources ?? [];
+    const lines = entries.map(entry => {
+      const noun =
+        entry.deleted_count === 1 ? trans.__('item') : trans.__('items');
+      return trans.__(
+        '%1: %2 %3 deleted',
+        entry.label,
+        entry.deleted_count,
+        noun
+      );
+    });
+    if (result.left_count !== undefined) {
+      const noun =
+        result.left_count === 1 ? trans.__('item') : trans.__('items');
+      lines.push(trans.__('%1 %2 left', result.left_count, noun));
+    }
+    const errors: string[] = [];
+    for (const entry of entries) {
+      for (const message of entry.errors) {
+        errors.push(trans.__('%1: %2', entry.label, message));
+      }
+    }
+    const title =
+      scope === 'all'
+        ? trans.__('Clean All Sources')
+        : trans.__('Clean Workspace');
+    if (errors.length > 0) {
+      showErrorMessage(
+        trans.__('%1 Failed', title),
+        [...lines, ...errors].join('\n')
+      );
+      return;
+    }
+    await showDialog({ title, body: lines.join('\n') });
   }
 
   /**
@@ -1011,6 +1523,10 @@ export class TrashWidget extends Widget {
    */
   dispose(): void {
     this._stopAutoRefresh();
+    if (this._warmMarkTimer !== null) {
+      clearTimeout(this._warmMarkTimer);
+      this._warmMarkTimer = null;
+    }
     super.dispose();
   }
 }

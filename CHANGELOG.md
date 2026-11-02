@@ -2,6 +2,28 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.22] - 2026-11-02
+
+### Added
+
+- Trash source sections below the main list for `/home/cache` and every per-user home trash, each collapsible and showing its own item count and size
+- `Clean All Sources` empties every source; `Clean Workspace` removes only entries whose original path lies under the workspace root and reports what it left
+- Server endpoints `GET sources`, `GET list?source=` and `POST empty` with `scope` of `xdg`, `all` or `workspace`
+
+### Changed
+
+- The header refresh button stays static; a still ring marks a refresh in flight and clears itself when the request never returns
+- The stale-load retry asks again for the newest requested folder, waits while a younger load is pending, and never draws a superseded answer over a pending navigation
+- Extra sections cap at 40 percent of the panel height, so the main list keeps its share; the busy ring and the section focus ring meet 3:1 contrast
+- Trash sources are deduplicated by file identity, so one trash mounted under two paths is listed once
+- The Galata suite runs one spec file at a time, because its specs share one server and one seeded trash
+
+### Fixed
+
+- The refresh icon rotated with nothing loading and no click
+- Empty Trash retries a directory a writer refilled, instead of failing with `Directory not empty`
+- A home trash that is the same directory as the XDG trash was listed as a second section
+
 ## [1.1.21] - 2026-10-31
 
 ### Changed
