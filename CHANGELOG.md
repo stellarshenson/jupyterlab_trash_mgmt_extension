@@ -2,6 +2,17 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.26] - 2026-11-13
+
+### Changed
+
+- Count and size a trash source without building its listing
+- Skip the PayPal donate link in the link check
+
+### Fixed
+
+- Keep the trashinfo of an undeleted entry and list the clean commands in the palette
+
 ## [1.1.22] - 2026-11-02
 
 ### Added
