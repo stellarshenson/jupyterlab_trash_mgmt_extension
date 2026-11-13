@@ -75,6 +75,13 @@ REST handlers under `jupyterlab-trash-mgmt-extension/`
   - test-tags: UNIT
   - log: 2026-11-13T06:47:00Z @kj added
   - log: 2026-11-13T06:51:13Z @kj closed
+- [x] `DEF-API-32-SOURCES-LISTING` **sources summary builds the full listing** - MEDIUM; GET /sources built the whole /list response for every source only to read its count and size, so each panel load and each 10 s poll parsed every .trashinfo twice; fix: collect_sources counts the entries of files/ and sums get_item_size; jupyterlab_trash_mgmt_extension/routes.py
+  - evidence: pytest 84 passed, TestTrashSources still reports item_count 1 and total_size 5 B per source; collect_sources no longer calls collect_listing or get_trash_metadata
+  - repro: open the Trash panel on a trash of 20,000 entries and profile GET /sources: it calls get_trash_metadata once per entry
+  - test-tags: UNIT
+  - root-cause: 2026-11-13T07:07:54Z @kj collect_sources called collect_listing, which parses the trashinfo of every entry, builds an item dict per entry and sorts them, and used only item_count and total_size_formatted of the result
+  - log: 2026-11-13T07:07:54Z @kj added
+  - log: 2026-11-13T07:08:11Z @kj closed
 
 ## Trash side panel `PANEL`
 

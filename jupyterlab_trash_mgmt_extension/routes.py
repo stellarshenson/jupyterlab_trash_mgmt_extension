@@ -405,9 +405,11 @@ def collect_sources() -> list[dict]:
             'error': ''
         }
         try:
-            _status, body = collect_listing('', source['directory'])
-            entry['item_count'] = body['item_count']
-            entry['total_size'] = body['total_size_formatted']
+            # Count and size only: the full listing parses every trashinfo
+            files = source['directory'] / 'files'
+            sizes = [get_item_size(item) for item in files.iterdir()] if files.exists() else []
+            entry['item_count'] = len(sizes)
+            entry['total_size'] = format_size(sum(sizes))
         except (PermissionError, OSError) as error:
             entry['error'] = str(error)
         sources.append(entry)
