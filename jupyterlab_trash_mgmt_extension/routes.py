@@ -610,9 +610,12 @@ def empty_source(trash_dir: Path) -> tuple[int, list[str]]:
             except Exception as e:
                 errors.append(f"{entry.name}: {str(e)}")
 
-    # Delete all trashinfo files
+    # Delete the trashinfo files, except of an entry that could not be removed:
+    # it stays in the trash and Restore needs its original path
     if info_dir.exists():
         for entry in list(info_dir.iterdir()):
+            if os.path.lexists(files_dir / entry.name.removesuffix('.trashinfo')):
+                continue
             try:
                 entry.unlink()
             except Exception:

@@ -603,3 +603,25 @@ class TestEmptyScopes:
         assert body == {"success": True, "deleted_count": 1}
         assert list((trash_dir / "files").iterdir()) == []
         assert (cache / "files" / "cached.txt").exists()
+
+
+def test_empty_trash_keeps_the_trashinfo_of_an_entry_it_could_not_delete(
+    trash_dir, sample_trash_file, monkeypatch
+):
+    """The entry that stays in the trash keeps its original path for Restore."""
+    stuck = trash_dir / "files" / "stuck"
+    stuck.mkdir()
+    stuck_info = trash_dir / "info" / "stuck.trashinfo"
+    stuck_info.write_text("[Trash Info]\nPath=/home/user/stuck\n")
+
+    def failing_rmtree(path, *args, **kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied", str(path))
+
+    monkeypatch.setattr(routes.shutil, "rmtree", failing_rmtree)
+
+    status, body = empty_trash()
+
+    assert body["success"] is False
+    assert body["deleted_count"] == 1
+    assert stuck.exists() and stuck_info.exists()
+    assert not sample_trash_file["info_path"].exists()

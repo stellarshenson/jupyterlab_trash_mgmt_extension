@@ -4,6 +4,7 @@ import {
   JupyterFrontEndPlugin
 } from '@jupyterlab/application';
 
+import { ICommandPalette } from '@jupyterlab/apputils';
 import { nullTranslator } from '@jupyterlab/translation';
 
 import { isTrashEnabled } from './request';
@@ -31,7 +32,12 @@ const plugin: JupyterFrontEndPlugin<void> = {
     'JupyterLab extension for trash management with a dedicated sidebar panel',
   autoStart: true,
   requires: [ILabShell],
-  activate: async (app: JupyterFrontEnd, labShell: ILabShell) => {
+  optional: [ICommandPalette],
+  activate: async (
+    app: JupyterFrontEnd,
+    labShell: ILabShell,
+    palette: ICommandPalette | null
+  ) => {
     console.log(
       'JupyterLab extension @stellarshenson/jupyterlab-trash-mgmt-extension is activated!'
     );
@@ -98,6 +104,11 @@ const plugin: JupyterFrontEndPlugin<void> = {
         (widget as any)._cleanSources('workspace');
       }
     });
+
+    // The palette is the only place the two cleans can be started from
+    for (const command of Object.values(CommandIDs)) {
+      palette?.addItem({ command, category: trans.__('Trash') });
+    }
   }
 };
 

@@ -68,6 +68,13 @@ REST handlers under `jupyterlab-trash-mgmt-extension/`
   - log: 2026-11-01T15:12:23Z @kj added
   - log: 2026-11-01T15:46:04Z @kj closed
   - log: 2026-11-01T16:13:20Z @kj dedupe key changed from the resolved path to (st_dev, st_ino), because a bind mount aliases one directory under two paths that resolve differently; bwrap probe: fixed returns ['xdg'], the path key returns ['xdg', 'home:alice'], an unaliased home trash stays a source; pytest 83
+- [x] `DEF-API-30-INFO-LOSS` **Empty Trash removes the trashinfo of an entry it could not delete** - MEDIUM; Empty Trash or Clean All Sources fails on one entry (folder holding a read-only directory), the entry stays in the trash but its .trashinfo is gone, so Restore answers 400 `Cannot determine original path`; cause: `empty_source` unlinks every file in info/; `jupyterlab_trash_mgmt_extension/routes.py`
+  - evidence: info loop skips a trashinfo whose entry still exists in files/; pytest test_empty_trash_keeps_the_trashinfo_of_an_entry_it_could_not_delete fails before the fix, passes after; pytest 84 passed
+  - root-cause: 2026-11-13T06:51:13Z @kj empty_source unlinked every file in info/ after the delete loop, whatever the loop left in files/
+  - repro: trash a folder holding a chmod 555 subfolder with a file, Empty Trash, then Restore the entry that stayed
+  - test-tags: UNIT
+  - log: 2026-11-13T06:47:00Z @kj added
+  - log: 2026-11-13T06:51:13Z @kj closed
 
 ## Trash side panel `PANEL`
 
@@ -192,6 +199,13 @@ Lumino widget in `src/widget.ts`
   - log: 2026-11-01T14:00:04Z @kj edited evidence "jest 73 passed incl. src/__tests__/request.spec.ts cases: requestAPI with timeoutMs rejects when the response never settles and a call without it passes no signal; only _fetchList passes 30000 ms, restore, delete and empty pass three arguments" -> "jest 76 passed: 'lets the background refresh through a pending load only when it is stale' and the busy-mark timeout case; a pending load older than STALE_LOAD_MS no longer blocks the background refresh, and the list request is never cancelled; pytest 76 passed"
   - log: 2026-11-01T14:47:02Z @kj jest count corrected to 78 after the review rounds added cases
   - log: 2026-11-01T15:46:07Z @kj review round 1 repaired the watchdog rather than removing it: per-load start map, newest-pending gate, chase retargeted at the newest requested folder, at most one chase in flight, last-rendered-sequence render guard; five new jest cases fail on the pre-fix widget, jest 92 passes
+- [x] `DEF-PANEL-31-CLEAN-UNREACHABLE` **Clean All Sources and Clean Workspace cannot be started from the lab** - MAJOR; README states both cleans as features, but no button, menu or command palette entry runs them; cause: `trash:clean-all` and `trash:clean-workspace` are registered with `commands.addCommand` only; `src/index.ts`
+  - evidence: src/index.ts adds all four commands to the optional ICommandPalette under category Trash; jest 'adds every command to the command palette' passes; jest 94, Galata 10 passed
+  - root-cause: 2026-11-13T06:51:13Z @kj the four commands were added to app.commands only; JupyterLab lists a command in the palette only after palette.addItem, and no button or menu ran the two cleans
+  - repro: open the command palette, type Clean All Sources: no entry
+  - test-tags: UNIT
+  - log: 2026-11-13T06:47:00Z @kj added
+  - log: 2026-11-13T06:51:13Z @kj closed
 
 ## Test suite `TEST`
 
