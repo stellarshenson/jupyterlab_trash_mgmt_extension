@@ -39,6 +39,36 @@ function saveCollapsed(collapsed: Set<string>): void {
   }
 }
 
+/**
+ * The row an arrow, Home or End key moves to in a list of `count` rows, or
+ * null for any other key. Without an active row the arrows start at an end.
+ */
+function movedIndex(key: string, index: number, count: number): number | null {
+  let target: number;
+  switch (key) {
+    case 'ArrowDown':
+      target = index < 0 ? 0 : index + 1;
+      break;
+    case 'ArrowUp':
+      target = index < 0 ? count - 1 : index - 1;
+      break;
+    case 'Home':
+      target = 0;
+      break;
+    case 'End':
+      target = count - 1;
+      break;
+    default:
+      return null;
+  }
+  return Math.max(0, Math.min(target, count - 1));
+}
+
+/** Shift+F10 and the ContextMenu key open a row menu. */
+function isMenuKey(e: KeyboardEvent): boolean {
+  return e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey);
+}
+
 // A load pending longer than this no longer blocks the auto-refresh, so a
 // hung server cannot stop the list from updating. Its response is discarded
 // by the sequence number when it finally arrives.
@@ -93,6 +123,8 @@ interface ISectionParts {
   caret: HTMLSpanElement;
   label: HTMLSpanElement;
   list: HTMLDivElement;
+  // The listing the rows were drawn from, so an unchanged one is not redrawn
+  key?: string;
 }
 
 type SortColumn = 'name' | 'modified' | 'size';
@@ -148,6 +180,8 @@ export class TrashWidget extends Widget {
   // The extra trash sources, one collapsible section each, below the main list
   private _sectionsEl: HTMLDivElement;
   private _sources: ITrashSource[] = [];
+  // Set while a /sources request runs, so a refresh does not send a second one
+  private _sourcesPending = false;
   private _sectionParts: Map<string, ISectionParts> = new Map();
   // What each section's own listing request returned, or the error it raised
   private _sectionListings: Map<string, ITrashListResponse | Error> = new Map();
@@ -157,6 +191,12 @@ export class TrashWidget extends Widget {
   // Bumped on every sources answer, so an older listing answer is ignored
   private _sectionGen = 0;
   private _collapsed = loadCollapsed();
+  // The Restore menu of a location section row, the row it was opened on,
+  // and the active row of each location section, held by path because every
+  // listing answer rebuilds the rows
+  private _sectionMenu: Menu;
+  private _sectionTarget: { source: string; item: ITrashItem } | null = null;
+  private _sectionActive: Map<string, string> = new Map();
 
   constructor(serverSettings: ServerConnection.ISettings) {
     super();
@@ -182,6 +222,21 @@ export class TrashWidget extends Widget {
       }
       this._menuOpenedByKeyboard = false;
       this._focusListOrRefresh();
+    });
+
+    this._sectionMenu = new Menu({ commands: this._commands });
+    this._sectionMenu.addItem({ command: 'trash:restore-from-source' });
+    // The keyboard focus the menu took goes back to the row it was opened on
+    this._sectionMenu.aboutToClose.connect(() => {
+      this.node.classList.remove('jp-mod-contextMenuOpen');
+      if (!this._menuOpenedByKeyboard || this._sectionTarget === null) {
+        return;
+      }
+      this._menuOpenedByKeyboard = false;
+      this._sectionParts
+        .get(this._sectionTarget.source)
+        ?.list.querySelector<HTMLElement>('[tabindex="0"]')
+        ?.focus();
     });
 
     // Create header: title on the left, action icons on the right.
@@ -243,6 +298,13 @@ export class TrashWidget extends Widget {
     this._list.addEventListener('keydown', (e: KeyboardEvent) =>
       this._handleListKeyDown(e)
     );
+    // Keyboard focus with no active row activates the first row, as ArrowDown
+    // does (WAI-ARIA listbox); a mouse focus leaves it to the click
+    this._list.addEventListener('focus', () => {
+      if (this._activePath === null && this._list.matches(':focus-visible')) {
+        this._setActiveIndex(0);
+      }
+    });
     this.node.appendChild(this._list);
 
     // Create empty message
@@ -303,6 +365,19 @@ export class TrashWidget extends Widget {
       execute: () => {
         if (this._selectedItems.size > 0) {
           this._deleteItems([...this._selectedItems]);
+        }
+      }
+    });
+
+    this._commands.addCommand('trash:restore-from-source', {
+      describedBy: { args: { type: 'object', properties: {} } },
+      label: trans.__('Restore'),
+      execute: () => {
+        if (this._sectionTarget !== null) {
+          void this._restoreFromSource(
+            this._sectionTarget.source,
+            this._sectionTarget.item
+          );
         }
       }
     });
@@ -457,7 +532,7 @@ export class TrashWidget extends Widget {
     this._pendingLoads++;
     this._list.setAttribute('aria-busy', 'true');
     // Sources load alongside the listing; their sections never hold it back
-    void this._loadSources(seq);
+    void this._loadSources();
     try {
       data = await this._fetchList(target);
     } finally {
@@ -530,7 +605,11 @@ export class TrashWidget extends Widget {
    * Fetch the source list for a load and draw its sections. The main listing
    * does not wait for this request.
    */
-  private async _loadSources(seq: number): Promise<void> {
+  private async _loadSources(): Promise<void> {
+    if (this._sourcesPending) {
+      return;
+    }
+    this._sourcesPending = true;
     let sources: ITrashSource[];
     try {
       sources = await requestAPI<ITrashSource[]>(
@@ -540,11 +619,10 @@ export class TrashWidget extends Widget {
     } catch (error) {
       console.warn('Failed to load trash sources:', error);
       return;
+    } finally {
+      this._sourcesPending = false;
     }
-    // A newer load has started since; its source list is the one to show
-    if (seq !== this._loadSeq) {
-      return;
-    }
+    // The guard lets one /sources request run at a time, so its answer is the newest
     this._sources = sources;
     // Every load refreshes each section's own listing
     this._sectionGen++;
@@ -553,26 +631,28 @@ export class TrashWidget extends Widget {
     this._renderSections();
   }
 
-  /** Rebuild the sections of the sources the server returned, in its order. */
+  /**
+   * Draw the sections of the sources the server returned, in its order. A
+   * source that still has a section keeps its elements and the focus in them.
+   */
   private _renderSections(): void {
-    // The rebuild replaces every header; the focused one takes the focus back
-    const active = document.activeElement as HTMLElement | null;
-    const focusedId = active?.closest<HTMLElement>('.jp-TrashPanel-section')
-      ?.dataset.source;
+    const previous = new Map(this._sectionParts);
     this._sectionParts.clear();
-    this._sectionsEl.innerHTML = '';
-    for (const source of this._sources) {
-      // The xdg trash stays the main section above
-      if (source.id === 'xdg') {
-        continue;
-      }
-      const parts = this._createSection(source);
+    // The xdg trash stays the main section above
+    const sources = this._sources.filter(source => source.id !== 'xdg');
+    sources.forEach((source, index) => {
+      const parts = previous.get(source.id) ?? this._createSection(source);
+      previous.delete(source.id);
       this._sectionParts.set(source.id, parts);
-      this._sectionsEl.appendChild(parts.section);
+      // Moving a node drops the focus in it, so only a misplaced section moves
+      const at = this._sectionsEl.children[index] ?? null;
+      if (at !== parts.section) {
+        this._sectionsEl.insertBefore(parts.section, at);
+      }
       this._paintSection(source, parts);
-    }
-    if (focusedId !== undefined) {
-      this._sectionParts.get(focusedId)?.header.focus();
+    });
+    for (const parts of previous.values()) {
+      parts.section.remove();
     }
   }
 
@@ -607,6 +687,30 @@ export class TrashWidget extends Widget {
 
     const list = document.createElement('div');
     list.className = 'jp-TrashPanel-sectionList';
+    // A location trash's rows restore; the list is one tab stop whose arrows
+    // move the active row and whose focused row is the active one
+    if (source.id.startsWith('location:')) {
+      list.setAttribute('role', 'listbox');
+      list.setAttribute('aria-label', source.label);
+      list.addEventListener('keydown', (e: KeyboardEvent) => {
+        const rows = Array.from(list.children) as HTMLElement[];
+        const moved = movedIndex(
+          e.key,
+          rows.findIndex(row => row.tabIndex === 0),
+          rows.length
+        );
+        if (moved === null || rows.length === 0) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        rows[moved].focus();
+        rows[moved].scrollIntoView?.({ block: 'nearest' });
+      });
+      list.addEventListener('focusin', (e: FocusEvent) =>
+        this._activateSectionRow(source.id, list, e.target as HTMLElement)
+      );
+    }
 
     section.append(header, list);
     return { section, header, caret, label, list };
@@ -638,12 +742,21 @@ export class TrashWidget extends Widget {
     const cached = this._sectionListings.get(source.id);
     const error =
       source.error || (cached instanceof Error ? cached.message : '');
+    // The label or the error takes the ellipsis; the count and size never shrink
+    const text = document.createElement('span');
+    text.className = 'jp-TrashPanel-sectionText';
     if (error) {
-      parts.label.textContent = trans.__('%1: %2', source.label, error);
+      text.textContent = trans.__('%1: %2', source.label, error);
+      parts.label.replaceChildren(text);
       parts.list.innerHTML = '';
+      parts.key = undefined;
       return;
     }
-    parts.label.textContent = this._sourceSummary(source);
+    text.textContent = source.label;
+    const count = document.createElement('span');
+    count.className = 'jp-TrashPanel-sectionCount';
+    count.textContent = this._sourceCount(source);
+    parts.label.replaceChildren(text, count);
     if (!expanded) {
       return;
     }
@@ -653,9 +766,112 @@ export class TrashWidget extends Widget {
     if (cached === undefined || cached instanceof Error) {
       return;
     }
+    // An unchanged listing keeps its rows, and the focused one, and only
+    // moves their ages on
+    const key = JSON.stringify(
+      cached.items.map(item => [item.trash_path, item.size, item.deletion_date])
+    );
+    if (key === parts.key) {
+      cached.items.forEach((item, index) => {
+        parts.list.children[index].querySelector(
+          '.jp-TrashPanel-sectionAge'
+        )!.textContent = this._formatRelativeTime(item.deletion_date);
+      });
+      return;
+    }
+    parts.key = key;
+    const hadFocus = parts.list.contains(document.activeElement);
     parts.list.innerHTML = '';
+    const restorable = source.id.startsWith('location:');
     for (const item of cached.items) {
-      parts.list.appendChild(this._sectionRow(item));
+      parts.list.appendChild(
+        this._sectionRow(item, restorable ? source.id : null)
+      );
+    }
+    if (!restorable) {
+      return;
+    }
+    // The rebuilt rows keep the active row and the focus it held
+    const rows = Array.from(parts.list.children) as HTMLElement[];
+    const active =
+      rows.find(
+        row => row.dataset.path === this._sectionActive.get(source.id)
+      ) ?? rows[0];
+    this._activateSectionRow(source.id, parts.list, active);
+    if (hadFocus) {
+      (active ?? parts.header).focus();
+    }
+  }
+
+  /** Make one row of a location section the tab stop of its list. */
+  private _activateSectionRow(
+    source: string,
+    list: HTMLElement,
+    row: HTMLElement | undefined
+  ): void {
+    for (const el of Array.from(list.children) as HTMLElement[]) {
+      el.tabIndex = el === row ? 0 : -1;
+    }
+    if (row?.dataset.path !== undefined) {
+      this._sectionActive.set(source, row.dataset.path);
+    }
+  }
+
+  /** Open the Restore menu of a location section row at a point. */
+  private _openSectionMenu(
+    source: string,
+    item: ITrashItem,
+    row: HTMLElement,
+    x: number,
+    y: number,
+    byKeyboard: boolean
+  ): void {
+    this._activateSectionRow(source, row.parentElement!, row);
+    this._sectionTarget = { source, item };
+    this.node.classList.add('jp-mod-contextMenuOpen');
+    this._menuOpenedByKeyboard = byKeyboard;
+    this._sectionMenu.open(x, y);
+  }
+
+  /**
+   * Restore one entry of a location trash to its original path. Success
+   * reloads the source counts and the section listings; a failure, such as
+   * an existing destination, is reported the way the main list reports it.
+   */
+  private async _restoreFromSource(
+    source: string,
+    item: ITrashItem
+  ): Promise<void> {
+    this._setLoading(true);
+    try {
+      await requestAPI<{ success: boolean; restored_to: string }>(
+        'restore',
+        this._serverSettings,
+        {
+          method: 'POST',
+          body: JSON.stringify({ trash_path: item.trash_path, source })
+        }
+      );
+      // The row after the restored one becomes active, or the one before it
+      // when it was last; none leaves the focus to the section header
+      const rows = Array.from(
+        this._sectionParts.get(source)?.list.children ?? []
+      ) as HTMLElement[];
+      const index = rows.findIndex(row => row.dataset.path === item.trash_path);
+      const next = (rows[index + 1] ?? rows[index - 1])?.dataset.path;
+      if (next === undefined) {
+        this._sectionActive.delete(source);
+      } else {
+        this._sectionActive.set(source, next);
+      }
+      await this._loadSources();
+    } catch (error: any) {
+      showErrorMessage(
+        'Restore Failed',
+        `${item.name}: ${error?.message || 'unknown error'}`
+      );
+    } finally {
+      this._setLoading(false);
     }
   }
 
@@ -693,9 +909,46 @@ export class TrashWidget extends Widget {
     }
   }
 
-  private _sectionRow(item: ITrashItem): HTMLDivElement {
+  /** One section row; a row of a location trash opens the Restore menu. */
+  private _sectionRow(
+    item: ITrashItem,
+    restoreSource: string | null
+  ): HTMLDivElement {
     const row = document.createElement('div');
     row.className = 'jp-TrashPanel-sectionRow';
+    if (restoreSource !== null) {
+      row.dataset.path = item.trash_path;
+      row.setAttribute('role', 'option');
+      row.title = this._itemTitle(item);
+      row.addEventListener('contextmenu', (e: MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this._openSectionMenu(
+          restoreSource,
+          item,
+          row,
+          e.clientX,
+          e.clientY,
+          false
+        );
+      });
+      row.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (!isMenuKey(e)) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = row.getBoundingClientRect();
+        this._openSectionMenu(
+          restoreSource,
+          item,
+          row,
+          rect.left + 8,
+          rect.bottom,
+          true
+        );
+      });
+    }
 
     const name = document.createElement('span');
     name.className = 'jp-TrashPanel-sectionName';
@@ -715,14 +968,13 @@ export class TrashWidget extends Widget {
 
   /** A source's label with its count and size, as the header shows it. */
   private _sourceSummary(source: ITrashSource): string {
+    return source.label + this._sourceCount(source);
+  }
+
+  /** The ' (n items, size)' part of a source's summary. */
+  private _sourceCount(source: ITrashSource): string {
     const noun = source.item_count === 1 ? trans.__('item') : trans.__('items');
-    return trans.__(
-      '%1 (%2 %3, %4)',
-      source.label,
-      source.item_count,
-      noun,
-      source.total_size
-    );
+    return trans.__(' (%1 %2, %3)', source.item_count, noun, source.total_size);
   }
 
   /**
@@ -888,13 +1140,15 @@ export class TrashWidget extends Widget {
   private _renderItems(): void {
     this._list.innerHTML = '';
     this._itemElements.clear();
+    // Lifts the height cap of the sections while the main list is empty
+    this.toggleClass('jp-mod-empty', this._items.length === 0);
 
     if (this._items.length === 0) {
       this._emptyMessage.textContent =
         this._path.length > 0
           ? trans.__('Folder is empty')
           : trans.__('Trash is empty');
-      this._emptyMessage.style.display = 'flex';
+      this._emptyMessage.style.display = '';
       // A hidden element cannot hold the focus; hand it to the header
       if (
         document.activeElement === this._list ||
@@ -991,6 +1245,16 @@ export class TrashWidget extends Widget {
     }
   }
 
+  /** The hover title of a restorable row: where it restores to and what it is. */
+  private _itemTitle(item: ITrashItem): string {
+    return [
+      `Original: ${item.original_path}`,
+      `Type: ${item.is_symlink ? 'Symbolic link' : item.is_dir ? 'Folder' : 'File'}`,
+      `Size: ${item.size_formatted}`,
+      `Deleted: ${this._formatDate(item.deletion_date)}`
+    ].join('\n');
+  }
+
   private _createItemElement(item: ITrashItem): HTMLDivElement {
     const itemEl = document.createElement('div');
     itemEl.className = 'jp-TrashPanel-item';
@@ -1002,12 +1266,7 @@ export class TrashWidget extends Widget {
     if (this._selectedItems.has(item)) {
       itemEl.classList.add('jp-mod-selected');
     }
-    itemEl.title = [
-      `Original: ${item.original_path}`,
-      `Type: ${item.is_symlink ? 'Symbolic link' : item.is_dir ? 'Folder' : 'File'}`,
-      `Size: ${item.size_formatted}`,
-      `Deleted: ${this._formatDate(item.deletion_date)}`
-    ].join('\n');
+    itemEl.title = this._itemTitle(item);
 
     // Icon + Name column
     const nameCol = document.createElement('span');
@@ -1099,47 +1358,19 @@ export class TrashWidget extends Widget {
     const index = this._sortedItems.findIndex(
       item => item.trash_path === this._activePath
     );
-    switch (e.key) {
-      case 'ArrowDown':
-        this._setActiveIndex(index < 0 ? 0 : index + 1);
-        break;
-      case 'ArrowUp':
-        this._setActiveIndex(
-          index < 0 ? this._sortedItems.length - 1 : index - 1
-        );
-        break;
-      case 'Home':
-        this._setActiveIndex(0);
-        break;
-      case 'End':
-        this._setActiveIndex(this._sortedItems.length - 1);
-        break;
-      case ' ':
-        if (index < 0) {
-          return;
-        }
-        this._toggleSelection(this._sortedItems[index]);
-        break;
-      case 'Enter':
-        if (index < 0) {
-          return;
-        }
-        this._openItem(this._sortedItems[index]);
-        break;
-      case 'F10':
-        if (!e.shiftKey || index < 0) {
-          return;
-        }
-        this._openContextMenuAt(this._sortedItems[index]);
-        break;
-      case 'ContextMenu':
-        if (index < 0) {
-          return;
-        }
-        this._openContextMenuAt(this._sortedItems[index]);
-        break;
-      default:
-        return;
+    const moved = movedIndex(e.key, index, this._sortedItems.length);
+    if (moved !== null) {
+      this._setActiveIndex(moved);
+    } else if (index < 0) {
+      return;
+    } else if (e.key === ' ') {
+      this._toggleSelection(this._sortedItems[index]);
+    } else if (e.key === 'Enter') {
+      this._openItem(this._sortedItems[index]);
+    } else if (isMenuKey(e)) {
+      this._openContextMenuAt(this._sortedItems[index]);
+    } else {
+      return;
     }
     e.preventDefault();
     e.stopPropagation();
@@ -1149,11 +1380,10 @@ export class TrashWidget extends Widget {
     if (this._sortedItems.length === 0) {
       return;
     }
-    const clamped = Math.max(0, Math.min(index, this._sortedItems.length - 1));
-    this._activePath = this._sortedItems[clamped].trash_path;
+    this._activePath = this._sortedItems[index].trash_path;
     this._renderActiveRow();
     this._itemElements
-      .get(this._sortedItems[clamped])
+      .get(this._sortedItems[index])
       ?.scrollIntoView?.({ block: 'nearest' });
   }
 
@@ -1167,6 +1397,10 @@ export class TrashWidget extends Widget {
       !this._sortedItems.some(row => row.trash_path === this._activePath)
     ) {
       this._activePath = null;
+      // The focused list fires no new focus event; apply the focus rule here
+      if (this._list.matches(':focus-visible')) {
+        this._setActiveIndex(0);
+      }
     }
     this._renderActiveRow();
   }

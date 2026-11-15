@@ -251,7 +251,9 @@ function sourceOf(
       ? 'Trash'
       : id === 'cache'
         ? '/home/cache'
-        : `/home/${id.slice('home:'.length)}`;
+        : id.startsWith('location:')
+          ? id.slice('location:'.length).replace(/\/\.Trash-\d+$/, '')
+          : `/home/${id.slice('home:'.length)}`;
   return { id, label, item_count: itemCount, total_size: totalSize, error };
 }
 
@@ -744,7 +746,8 @@ describe('folder navigation', () => {
     await settle();
     const message = find(widget, '.jp-TrashPanel-empty');
     expect(message.textContent).toBe('Folder is empty');
-    expect(message.style.display).toBe('flex');
+    // Shown, with the display of the stylesheet (ACC-NAV-85-EMPTY-LINE)
+    expect(message.style.display).toBe('');
   });
 
   it('shows Trash is empty at the top level', async () => {
@@ -1035,6 +1038,27 @@ describe('keyboard model', () => {
     expect(activeRow(widget)!.id).toBe(id);
     expect(list.getAttribute('aria-activedescendant')).toBe(id);
   });
+
+  it('rings only the active row of the focused list, never the list (DEF-PANEL-34-FOCUS-RING)', async () => {
+    const style = document.createElement('style');
+    style.textContent = jest
+      .requireActual('fs')
+      .readFileSync('style/base.css', 'utf8');
+    document.head.appendChild(style);
+    const widget = await openAttached({ list: three() });
+    const list = listBox(widget);
+
+    click(rows(widget)[1]);
+    list.focus();
+    // jsdom keeps the outline shorthand unexpanded
+    const listOutline = getComputedStyle(list).outline;
+    const rowOutline = getComputedStyle(activeRow(widget)!).outline;
+    style.remove();
+
+    expect(document.activeElement).toBe(list);
+    expect(listOutline).toBe('none');
+    expect(rowOutline).toContain('solid');
+  });
 });
 
 describe('row ids', () => {
@@ -1064,8 +1088,8 @@ describe('focus edges', () => {
   it('moves focus to the list when a focused breadcrumb is activated', async () => {
     const widget = await openAttached(nestedRoutes());
     const list = listBox(widget);
+    // jsdom takes every focus() as keyboard focus, which activates the first row
     list.focus();
-    press(list, 'ArrowDown');
     press(list, 'Enter');
     await settle();
     expect(breadcrumb(widget).textContent).toBe('Trash/a');
@@ -1077,6 +1101,21 @@ describe('focus edges', () => {
 
     expect(breadcrumb(widget).hidden).toBe(true);
     expect(document.activeElement).toBe(list);
+  });
+
+  it('makes the first row of an entered folder active while the list keeps the keyboard focus (DEF-PANEL-34-FOCUS-RING)', async () => {
+    const widget = await openAttached(nestedRoutes());
+    const list = listBox(widget);
+    list.focus();
+    expect(activeName(widget)).toBe('a');
+
+    press(list, 'Enter');
+    await settle();
+
+    expect(breadcrumb(widget).textContent).toBe('Trash/a');
+    expect(document.activeElement).toBe(list);
+    expect(activeRow(widget)).toBe(rows(widget)[0]);
+    expect(list.getAttribute('aria-activedescendant')).toBe(rows(widget)[0].id);
   });
 
   it('keeps the list focused across a background reload', async () => {
@@ -1152,7 +1191,6 @@ describe('focus edges', () => {
     const widget = await openAttached({ list: three() });
     const list = listBox(widget);
     list.focus();
-    press(list, 'ArrowDown');
     press(list, 'ArrowDown');
     expect(activeName(widget)).toBe('b.txt');
 
@@ -1644,6 +1682,78 @@ describe('trash sources', () => {
     );
   });
 
+  it('keeps the count and size in their own non-shrinking span', async () => {
+    const style = document.createElement('style');
+    // jest runs from the repository root
+    style.textContent = jest
+      .requireActual('fs')
+      .readFileSync('style/base.css', 'utf8');
+    document.head.appendChild(style);
+    const widget = await openAttached(sourcedRoutes());
+    const label = sectionLabel(widget, 'cache');
+    const count = label.querySelector<HTMLElement>(
+      ':scope > .jp-TrashPanel-sectionCount'
+    )!;
+    const shrink = getComputedStyle(count).flexShrink;
+    style.remove();
+
+    expect(
+      label.querySelector(':scope > .jp-TrashPanel-sectionText')!.textContent
+    ).toBe('/home/cache');
+    expect(count.textContent).toBe(' (12 items, 40 MB)');
+    expect(shrink).toBe('0');
+  });
+
+  it('lifts the 40% cap of the sections only while the main list is empty', async () => {
+    const style = document.createElement('style');
+    style.textContent = jest
+      .requireActual('fs')
+      .readFileSync('style/base.css', 'utf8');
+    document.head.appendChild(style);
+    const routes = { ...sourcedRoutes(), list: listOf([]) };
+    const widget = await openAttached(routes);
+    const box = find(widget, '.jp-TrashPanel-sections');
+    const emptyCap = getComputedStyle(box).maxHeight;
+    // ACC-NAV-85-EMPTY-LINE: the empty line is italic and never centered
+    const emptyLine = getComputedStyle(find(widget, '.jp-TrashPanel-empty'));
+    const emptyJustify = emptyLine.justifyContent;
+    const emptyFontStyle = emptyLine.fontStyle;
+
+    routes.list = listOf([file('one.txt')], '5 B');
+    await widget.refresh();
+    await settle();
+    const fullCap = getComputedStyle(box).maxHeight;
+    style.remove();
+
+    expect(emptyCap).toBe('none');
+    expect(fullCap).toBe('40%');
+    expect(emptyJustify).not.toBe('center');
+    expect(emptyFontStyle).toBe('italic');
+  });
+
+  it('sends no second sources request while one is running', async () => {
+    const held = deferred<unknown>();
+    const routes = sourcedRoutes();
+    const answer = routes.sources;
+    routes.sources = () => held.promise;
+    serve(routes);
+    const sourceCalls = () =>
+      request.mock.calls.filter(call => call[0] === 'sources').length;
+    const widget = new TrashWidget(settings);
+
+    void widget.refresh();
+    void widget.refresh();
+    await settle();
+    expect(sourceCalls()).toBe(1);
+
+    held.resolve(answer);
+    await settle();
+    expect(sectionHeader(widget, 'cache')).not.toBeNull();
+    void widget.refresh();
+    await settle();
+    expect(sourceCalls()).toBe(2);
+  });
+
   it('collapses on a header click, writes the key, and reloads collapsed', async () => {
     const widget = await open(sourcedRoutes());
     const header = sectionHeader(widget, 'cache');
@@ -1815,6 +1925,259 @@ describe('trash sources', () => {
     for (const element of [header, caret]) {
       expect(element.style.getPropertyValue('animation')).toBe('');
       expect(element.style.getPropertyValue('transition')).toBe('');
+    }
+  });
+});
+
+describe('location trash sections', () => {
+  const LOCATION = 'location:/mnt/data/.Trash-1000';
+  const LISTING = 'list?source=location%3A%2Fmnt%2Fdata%2F.Trash-1000';
+
+  /** The sourced routes plus a location trash holding two entries. */
+  function locationRoutes(): Record<string, Route> {
+    const routes = sourcedRoutes();
+    routes.sources = [
+      ...(routes.sources as ISource[]),
+      sourceOf(LOCATION, 2, '3 KB')
+    ];
+    routes[LISTING] = listOf([file('a.txt'), file('b.txt')], '3 KB');
+    return routes;
+  }
+
+  const locationRows = (widget: TrashWidget) => sectionRows(widget, LOCATION);
+
+  const sectionMenuOpen = (widget: TrashWidget) =>
+    jest
+      .spyOn((widget as any)._sectionMenu, 'open')
+      .mockImplementation(() => undefined);
+
+  function rightClick(element: HTMLElement): void {
+    element.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    );
+  }
+
+  it('renders as a section labelled with its location after the cache and home sections', async () => {
+    const widget = await open(locationRoutes());
+
+    expect(sections(widget).map(element => element.dataset.source)).toEqual([
+      'cache',
+      'home:alice',
+      LOCATION
+    ]);
+    expect(sectionLabel(widget, LOCATION).textContent).toBe(
+      '/mnt/data (2 items, 3 KB)'
+    );
+    expect(sectionList(widget, LOCATION).getAttribute('role')).toBe('listbox');
+    expect(locationRows(widget).map(row => row.tabIndex)).toEqual([0, -1]);
+  });
+
+  it('opens the Restore menu on right-click and posts the source with the path', async () => {
+    const widget = await open(locationRoutes());
+    const opened = sectionMenuOpen(widget);
+
+    rightClick(locationRows(widget)[0]);
+    expect(opened).toHaveBeenCalledTimes(1);
+    const menu = (widget as any)._sectionMenu;
+    expect(menu.items.map((item: any) => item.label)).toEqual(['Restore']);
+
+    const routes = locationRoutes();
+    routes.sources = [
+      sourceOf('xdg', 1, '5 B'),
+      sourceOf('cache', 12, '40 MB'),
+      sourceOf('home:alice', 1, '2 KB'),
+      sourceOf(LOCATION, 1, '1 KB')
+    ];
+    routes[LISTING] = listOf([file('b.txt')], '1 KB');
+    routes.restore = { success: true, restored_to: '/mnt/data/a.txt' };
+    serve(routes);
+
+    await menu.commands.execute(menu.items[0].command);
+    await settle();
+
+    const restore = request.mock.calls.find(call => call[0] === 'restore')!;
+    expect(restore[2].method).toBe('POST');
+    expect(JSON.parse(restore[2].body)).toEqual({
+      trash_path: 'a.txt',
+      source: LOCATION
+    });
+    // The section and its count reload; the main list is not asked again
+    expect(sectionLabel(widget, LOCATION).textContent).toBe(
+      '/mnt/data (1 item, 1 KB)'
+    );
+    expect(locationRows(widget)).toHaveLength(1);
+    expect(requested().filter(endPoint => endPoint === 'list')).toHaveLength(1);
+    expect(showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it('turns off the panel hover while the Restore menu is open (ACC-SCOPE-84-ROW-HOVER)', async () => {
+    const widget = await openAttached(locationRoutes());
+
+    rightClick(locationRows(widget)[0]);
+    expect(widget.node.classList).toContain('jp-mod-contextMenuOpen');
+
+    (widget as any)._sectionMenu.close();
+    expect(widget.node.classList).not.toContain('jp-mod-contextMenuOpen');
+  });
+
+  it('opens the menu with Shift+F10 and the menu key on the focused row', async () => {
+    const widget = await openAttached(locationRoutes());
+    const opened = sectionMenuOpen(widget);
+    const row = locationRows(widget)[1];
+    row.focus();
+    expect(row.tabIndex).toBe(0);
+
+    press(row, 'F10', { shiftKey: true });
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect((widget as any)._sectionTarget.item.trash_path).toBe('b.txt');
+
+    press(row, 'ContextMenu');
+    expect(opened).toHaveBeenCalledTimes(2);
+
+    press(row, 'F10');
+    expect(opened).toHaveBeenCalledTimes(2);
+  });
+
+  it('moves the active row with the arrows, Home and End as one tab stop', async () => {
+    const widget = await openAttached(locationRoutes());
+    const [first, second] = locationRows(widget);
+    first.focus();
+
+    press(first, 'ArrowDown');
+    expect(document.activeElement).toBe(second);
+    expect(locationRows(widget).map(row => row.tabIndex)).toEqual([-1, 0]);
+
+    // The last row stays active past the end
+    press(second, 'ArrowDown');
+    expect(document.activeElement).toBe(second);
+
+    press(second, 'Home');
+    expect(document.activeElement).toBe(first);
+    press(first, 'End');
+    expect(document.activeElement).toBe(second);
+    press(second, 'ArrowUp');
+    expect(document.activeElement).toBe(first);
+    expect(locationRows(widget).map(row => row.tabIndex)).toEqual([0, -1]);
+  });
+
+  it('keeps the focused row node when a refresh brings the same listing', async () => {
+    const widget = await openAttached(locationRoutes());
+    const row = locationRows(widget)[1];
+    row.focus();
+    const asked = requested().filter(endPoint => endPoint === LISTING).length;
+
+    await (widget as any)._refreshInBackground();
+    await settle();
+
+    expect(requested().filter(endPoint => endPoint === LISTING)).toHaveLength(
+      asked + 1
+    );
+    expect(locationRows(widget)[1]).toBe(row);
+    expect(document.activeElement).toBe(row);
+  });
+
+  // The first row hands the focus on to the next, the last one to the row before
+  it.each([
+    [0, ['b.txt', 'c.txt'], [0, -1]],
+    [2, ['a.txt', 'b.txt'], [-1, 0]]
+  ])(
+    'focuses the former second row after a keyboard restore of row %d of three',
+    async (restored, left, tabIndexes) => {
+      const routes = locationRoutes();
+      routes[LISTING] = listOf([file('a.txt'), file('b.txt'), file('c.txt')]);
+      const widget = await openAttached(routes);
+      sectionMenuOpen(widget);
+      const row = locationRows(widget)[restored];
+      row.focus();
+      press(row, 'F10', { shiftKey: true });
+
+      const after = locationRoutes();
+      after[LISTING] = listOf(left.map(name => file(name)));
+      after.restore = { success: true, restored_to: '/mnt/data/x' };
+      serve(after);
+      await (widget as any)._commands.execute('trash:restore-from-source');
+      await settle();
+
+      expect((document.activeElement as HTMLElement).dataset.path).toBe(
+        'b.txt'
+      );
+      expect(locationRows(widget).map(item => item.tabIndex)).toEqual(
+        tabIndexes
+      );
+    }
+  );
+
+  it('shows the error of a 409 answer and keeps the row', async () => {
+    const widget = await open(locationRoutes());
+    sectionMenuOpen(widget);
+    rightClick(locationRows(widget)[0]);
+
+    const routes = locationRoutes();
+    routes.restore = () =>
+      Promise.reject(
+        Object.assign(new Error('Destination exists: /mnt/data/a.txt'), {
+          response: { status: 409 }
+        })
+      );
+    serve(routes);
+
+    await (widget as any)._commands.execute('trash:restore-from-source');
+    await settle();
+
+    expect(showErrorMessage).toHaveBeenCalledWith(
+      'Restore Failed',
+      'a.txt: Destination exists: /mnt/data/a.txt'
+    );
+    expect(
+      locationRows(widget).map(
+        row => row.querySelector('.jp-TrashPanel-sectionName')!.textContent
+      )
+    ).toEqual(['a.txt', 'b.txt']);
+    expect(veil(widget).hidden).toBe(true);
+  });
+
+  it('opens no menu and adds no tab stop on a cache row', async () => {
+    const widget = await open(locationRoutes());
+    const opened = sectionMenuOpen(widget);
+    const mainOpened = jest
+      .spyOn((widget as any)._contextMenu, 'open')
+      .mockImplementation(() => undefined);
+    const row = sectionRows(widget, 'cache')[0];
+
+    rightClick(row);
+    press(row, 'F10', { shiftKey: true });
+
+    expect(opened).not.toHaveBeenCalled();
+    expect(mainOpened).not.toHaveBeenCalled();
+    expect(row.hasAttribute('tabindex')).toBe(false);
+    expect(sectionList(widget, 'cache').hasAttribute('role')).toBe(false);
+  });
+
+  it('titles a location row with its original path and leaves a cache row untitled', async () => {
+    const widget = await open(locationRoutes());
+
+    expect(locationRows(widget)[0].title).toContain(
+      'Original: /home/user/a.txt'
+    );
+    expect(sectionRows(widget, 'cache')[0].title).toBe('');
+  });
+
+  it('names the location source with its count and size in both clean dialogs', async () => {
+    const widget = await open(locationRoutes());
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: false } });
+
+    await (widget as any)._commands.execute('trash:clean-all');
+    await settle();
+    await (widget as any)._commands.execute('trash:clean-workspace');
+    await settle();
+
+    const dialogs = (showDialog as jest.Mock).mock.calls.map(call => call[0]);
+    expect(dialogs.map(dialog => dialog.title)).toEqual([
+      'Clean All Sources',
+      'Clean Workspace'
+    ]);
+    for (const dialog of dialogs) {
+      expect(dialog.body).toContain('/mnt/data (2 items, 3 KB)');
     }
   });
 });

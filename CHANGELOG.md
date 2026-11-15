@@ -2,6 +2,28 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.27] - 2026-11-15
+
+### Added
+
+- Trash folders on other file systems: the notebook root's `.Trash-<uid>` (or `.Trash/<uid>` under a sticky `.Trash`) is always watched, and the server option `c.TrashManagement.locations` (default `[]`) adds folders; each trash folder is a section with its own item count and size
+- Restore from a location section row with a right-click or Shift+F10; the row tooltip shows the original path, type, size and deletion time
+- Clean All Sources and Clean Workspace include the location trashes; a trashinfo `Path` relative to its location is joined to that location
+
+### Changed
+
+- With the main list empty the sections take the free panel height; with items they keep the 40 percent cap
+- One source count request runs at a time, so a section count can be up to one 10 s refresh old
+- A section header keeps its item count and size visible when the folder label is long
+- Section rows redraw only when their listing changed, so keyboard focus stays on its row
+- Location rows take the main-list hover background, and lose it while their Restore menu is open
+- `Trash is empty` and `Folder is empty` show as one left-aligned italic line under the summary bar, as in the other panels of the family
+
+### Fixed
+
+- Sizing or deleting a trashed folder stops at a file system mounted inside it; the entry stays in the trash with an error naming the mount, and a symbolic link is deleted as a link
+- The main list no longer draws a white focus outline around itself; keyboard focus with no active row makes the first row active, also after Enter on a folder or a keyboard Restore or Delete
+
 ## [1.1.26] - 2026-11-13
 
 ### Changed

@@ -2,6 +2,7 @@ import errno
 import json
 import os
 import shutil
+import stat
 import threading
 import time
 import urllib.parse
@@ -24,6 +25,14 @@ def get_trash_dir() -> Path:
 HOMES_ROOT = Path('/home')
 
 
+def resolve_locations(locations, root_dir: str) -> list[str]:
+    """The monitored locations as absolute paths: '~' expanded, a relative path joined to the server root."""
+    return [
+        os.path.abspath(os.path.join(root_dir, os.path.expanduser(location)))
+        for location in locations
+    ]
+
+
 _RMTREE_ATTEMPTS = 3
 _RMTREE_RETRY_DELAY = 0.1
 
@@ -33,7 +42,33 @@ def remove_tree(path) -> None:
 
     ENOTEMPTY during the walk means an entry was recreated after rmtree
     removed it; the writer gets a few short waits before the error is raised.
+    A directory on another device is a mount point (rm --one-file-system): it
+    and the folders above it stay, everything else goes, and OSError names it.
     """
+    # A bind mount of the same file system shares st_dev, so it is not detected
+    # here or in get_dir_size and its contents are deleted and counted.
+    device = os.lstat(path).st_dev
+    mounts = []
+    for top, dirs, _ in os.walk(path):
+        for name in list(dirs):
+            if os.lstat(os.path.join(top, name)).st_dev != device:
+                mounts.append(os.path.join(top, name))
+                dirs.remove(name)
+    if mounts:
+        keep = set()
+        for mount in mounts:
+            while mount != path:
+                keep.add(mount)
+                mount = os.path.dirname(mount)
+        for folder in [path, *(keep - set(mounts))]:
+            for child in os.scandir(folder):
+                if child.path in keep:
+                    continue
+                if child.is_dir(follow_symlinks=False):
+                    shutil.rmtree(child.path)
+                else:
+                    os.unlink(child.path)
+        raise OSError(f"{', '.join(mounts)}: holds a mount point, left in the trash")
     for attempt in range(1, _RMTREE_ATTEMPTS + 1):
         try:
             shutil.rmtree(path)
@@ -61,7 +96,14 @@ _dir_size_lock = threading.Lock()
 
 
 def get_dir_size(path: Path) -> int:
-    """Calculate total size of a directory recursively. Symlinks count as the link itself."""
+    """Calculate total size of a directory recursively. Symlinks count as the link itself.
+
+    A directory on another device is a mount point: its contents are not counted (du -x).
+    """
+    try:
+        device = os.lstat(path).st_dev
+    except (PermissionError, OSError):
+        return 0
     total = 0
     pending = [path]
     while pending:
@@ -74,7 +116,8 @@ def get_dir_size(path: Path) -> int:
                 if entry.is_symlink():
                     total += entry.stat(follow_symlinks=False).st_size
                 elif entry.is_dir(follow_symlinks=False):
-                    pending.append(Path(entry.path))
+                    if os.lstat(entry.path).st_dev == device:
+                        pending.append(Path(entry.path))
                 elif entry.is_file(follow_symlinks=False):
                     total += entry.stat(follow_symlinks=False).st_size
             except (PermissionError, OSError):
@@ -102,7 +145,7 @@ def get_dir_size_cached(path: Path) -> int:
     return size
 
 
-def invalidate_dir_size(path: Path) -> None:
+def invalidate_dir_size(path: Path, trash_dir: Path | None = None) -> None:
     """Drop the cached size of a path, of the cached paths beneath it, and of its ancestors.
 
     A mutation deeper in a folder changes that folder's total but not its mtime,
@@ -111,7 +154,7 @@ def invalidate_dir_size(path: Path) -> None:
     global _dir_size_epoch
     key = os.path.abspath(path)
     prefix = key + os.sep
-    root = os.path.abspath(get_trash_dir() / 'files')
+    root = os.path.abspath((trash_dir or get_trash_dir()) / 'files')
     with _dir_size_lock:
         _dir_size_epoch += 1
         for cached in list(_dir_size_cache):
@@ -172,8 +215,12 @@ def format_size(size_bytes: int) -> str:
     return f"{size_bytes:.1f} PB"
 
 
-def parse_trashinfo(info_path: Path) -> dict:
-    """Parse a .trashinfo file and return metadata."""
+def parse_trashinfo(info_path: Path, location: str | None = None) -> dict:
+    """Parse a .trashinfo file and return metadata.
+
+    A relative Path, as send2trash writes in a location trash, is joined to
+    that location; an absolute Path is kept.
+    """
     result = {
         'original_path': '',
         'deletion_date': ''
@@ -184,7 +231,10 @@ def parse_trashinfo(info_path: Path) -> dict:
         if config.has_section('Trash Info'):
             # Use raw=True to prevent interpolation of % characters in URL-encoded paths
             path = config.get('Trash Info', 'Path', fallback='', raw=True)
-            result['original_path'] = urllib.parse.unquote(path)
+            original_path = urllib.parse.unquote(path)
+            if location and original_path:
+                original_path = os.path.join(location, original_path)
+            result['original_path'] = original_path
             value = config.get('Trash Info', 'DeletionDate', fallback='', raw=True)
             try:
                 # send2trash stores local time with no offset; tag it with the server's
@@ -217,7 +267,9 @@ def resolve_trash_path(trash_path, trash_dir: Path | None = None) -> Path:
     return current / parts[-1]
 
 
-def get_trash_metadata(trash_path: str, trash_dir: Path | None = None) -> dict:
+def get_trash_metadata(
+    trash_path: str, trash_dir: Path | None = None, location: str | None = None
+) -> dict:
     """Original path and deletion date of an entry at any depth.
 
     Both come from the .trashinfo of the top-level item; a nested entry gets
@@ -225,7 +277,7 @@ def get_trash_metadata(trash_path: str, trash_dir: Path | None = None) -> dict:
     """
     top, _, inner = trash_path.partition('/')
     info_file = (trash_dir or get_trash_dir()) / 'info' / f"{top}.trashinfo"
-    metadata = parse_trashinfo(info_file) if info_file.exists() else {}
+    metadata = parse_trashinfo(info_file, location) if info_file.exists() else {}
     original_path = metadata.get('original_path', '')
     if original_path and inner:
         original_path = str(Path(original_path) / inner)
@@ -235,7 +287,9 @@ def get_trash_metadata(trash_path: str, trash_dir: Path | None = None) -> dict:
     }
 
 
-def collect_listing(folder: str, trash_dir: Path | None = None) -> tuple[int | None, dict]:
+def collect_listing(
+    folder: str, trash_dir: Path | None = None, location: str | None = None
+) -> tuple[int | None, dict]:
     """Build the /list response body for a folder path, with its HTTP status."""
     # strip=False: a folder name may start or end with a space
     listed = (trash_dir or get_trash_dir()) / 'files'
@@ -257,7 +311,7 @@ def collect_listing(folder: str, trash_dir: Path | None = None) -> tuple[int | N
             return 400, {'error': 'Not a folder'}
 
     # Inside a folder every entry shares the trashinfo of the top-level item
-    folder_metadata = get_trash_metadata(folder, trash_dir) if folder else None
+    folder_metadata = get_trash_metadata(folder, trash_dir, location) if folder else None
 
     items = []
     names = set()
@@ -274,7 +328,7 @@ def collect_listing(folder: str, trash_dir: Path | None = None) -> tuple[int | N
             try:
                 if folder_metadata is None:
                     trash_path = entry.name
-                    metadata = get_trash_metadata(trash_path, trash_dir)
+                    metadata = get_trash_metadata(trash_path, trash_dir, location)
                 else:
                     trash_path = f"{folder}/{entry.name}"
                     original_path = folder_metadata['original_path']
@@ -315,11 +369,13 @@ def collect_listing(folder: str, trash_dir: Path | None = None) -> tuple[int | N
     }
 
 
-def source_candidates() -> list[dict]:
+def source_candidates(locations=()) -> list[dict]:
     """Every possible trash source in display order, present or not.
 
     A home is only a candidate when its own directory is a real directory:
     a symlink under the homes root is not followed out of that root.
+    Each monitored location adds its .Trash-<uid>, and its .Trash/<uid> when
+    .Trash is a sticky directory that is not a symlink.
     """
     candidates = [
         {
@@ -353,6 +409,25 @@ def source_candidates() -> list[dict]:
             'path': home / '.local' / 'share' / 'Trash',
             'root': home
         })
+
+    uid = os.getuid()
+    for location in locations:
+        top = Path(location)
+        trashes = [top / f'.Trash-{uid}']
+        try:
+            mode = (top / '.Trash').lstat().st_mode
+        except OSError:
+            mode = 0
+        if stat.S_ISDIR(mode) and mode & stat.S_ISVTX:
+            trashes.append(top / '.Trash' / str(uid))
+        for trash in trashes:
+            candidates.append({
+                'id': f'location:{trash}',
+                'label': str(top),
+                'path': trash,
+                'root': top,
+                'location': str(top)
+            })
     return candidates
 
 
@@ -368,7 +443,7 @@ def resolve_source(candidate: dict) -> Path | None:
     return directory
 
 
-def existing_sources() -> list[dict]:
+def existing_sources(locations=()) -> list[dict]:
     """Every existing source in display order, with its resolved directory.
 
     A candidate whose directory has the file identity (device and inode) of one
@@ -377,7 +452,7 @@ def existing_sources() -> list[dict]:
     """
     sources = []
     seen = set()
-    for candidate in source_candidates():
+    for candidate in source_candidates(locations):
         directory = resolve_source(candidate)
         if directory is None:
             continue
@@ -393,10 +468,10 @@ def existing_sources() -> list[dict]:
     return sources
 
 
-def collect_sources() -> list[dict]:
+def collect_sources(locations=()) -> list[dict]:
     """The /sources response: each existing source with its count and size."""
     sources = []
-    for source in existing_sources():
+    for source in existing_sources(locations):
         entry = {
             'id': source['id'],
             'label': source['label'],
@@ -416,17 +491,17 @@ def collect_sources() -> list[dict]:
     return sources
 
 
-def collect_source_listing(source_id: str, folder: str) -> tuple[int | None, dict]:
+def collect_source_listing(source_id: str, folder: str, locations=()) -> tuple[int | None, dict]:
     """The /list response for one source id."""
     candidate = next(
-        (item for item in source_candidates() if item['id'] == source_id), None
+        (item for item in source_candidates(locations) if item['id'] == source_id), None
     )
     if candidate is None:
         return 400, {'error': 'Unknown trash source'}
 
     directory = resolve_source(candidate)
     if directory is not None:
-        return collect_listing(folder, directory)
+        return collect_listing(folder, directory, candidate.get('location'))
 
     if folder:
         return 404, {'error': 'Folder not found in trash'}
@@ -458,7 +533,7 @@ class TrashSourcesHandler(APIHandler):
     @tornado.web.authenticated
     async def get(self):
         sources = await tornado.ioloop.IOLoop.current().run_in_executor(
-            None, collect_sources
+            None, collect_sources, self.settings.get('trash_locations', [])
         )
         self.finish(json.dumps(sources))
 
@@ -472,7 +547,8 @@ class TrashListHandler(APIHandler):
         source = self.get_argument('source', 'xdg')
 
         status, body = await tornado.ioloop.IOLoop.current().run_in_executor(
-            None, collect_source_listing, source, folder
+            None, collect_source_listing, source, folder,
+            self.settings.get('trash_locations', [])
         )
 
         if status is not None:
@@ -480,20 +556,39 @@ class TrashListHandler(APIHandler):
         self.finish(json.dumps(body))
 
 
-def restore_item(trash_path: str) -> tuple[int | None, dict]:
-    """Restore one trashed entry. Returns the HTTP status and response body."""
+def restore_item(
+    trash_path: str, source_id: str | None = None, locations=()
+) -> tuple[int | None, dict]:
+    """Restore one trashed entry. Returns the HTTP status and response body.
+
+    Without a source id the entry is in the XDG trash; with one it is in
+    that source's trash.
+    """
+    trash_dir = None
+    location = None
+    if source_id is not None:
+        candidate = next(
+            (item for item in source_candidates(locations) if item['id'] == source_id), None
+        )
+        if candidate is None:
+            return 400, {'error': 'Unknown trash source'}
+        trash_dir = resolve_source(candidate)
+        if trash_dir is None:
+            return 404, {'error': 'Item not found in trash'}
+        location = candidate.get('location')
+
     try:
-        source = resolve_trash_path(trash_path)
+        source = resolve_trash_path(trash_path, trash_dir)
     except ValueError as e:
         return 400, {'error': str(e)}
 
-    info_file = get_trash_dir() / 'info' / f"{trash_path}.trashinfo"
+    info_file = (trash_dir or get_trash_dir()) / 'info' / f"{trash_path}.trashinfo"
 
     if not source.exists() and not source.is_symlink():
         return 404, {'error': 'Item not found in trash'}
 
     # Get original path from the trashinfo of the top-level item
-    original_path = get_trash_metadata(trash_path)['original_path']
+    original_path = get_trash_metadata(trash_path, trash_dir, location)['original_path']
 
     if not original_path:
         return 400, {'error': 'Cannot determine original path'}
@@ -518,7 +613,7 @@ def restore_item(trash_path: str) -> tuple[int | None, dict]:
         }
     except Exception as e:
         result = 500, {'error': str(e)}
-    invalidate_dir_size(source)
+    invalidate_dir_size(source, trash_dir)
     return result
 
 
@@ -536,7 +631,8 @@ class TrashRestoreHandler(APIHandler):
             return
 
         status, body = await tornado.ioloop.IOLoop.current().run_in_executor(
-            None, restore_item, trash_path
+            None, restore_item, trash_path, data.get('source'),
+            self.settings.get('trash_locations', [])
         )
 
         if status is not None:
@@ -637,7 +733,9 @@ def is_under(path: str, root: Path) -> bool:
     return True
 
 
-def empty_workspace(trash_dir: Path, root: Path) -> tuple[int, int, list[str]]:
+def empty_workspace(
+    trash_dir: Path, root: Path, location: str | None = None
+) -> tuple[int, int, list[str]]:
     """Delete only workspace entries from one trash directory.
 
     Returns the deleted count, the left count and the errors.
@@ -652,7 +750,7 @@ def empty_workspace(trash_dir: Path, root: Path) -> tuple[int, int, list[str]]:
     if files_dir.exists():
         for entry in list(files_dir.iterdir()):
             info_file = info_dir / f"{entry.name}.trashinfo"
-            original_path = parse_trashinfo(info_file).get('original_path', '')
+            original_path = parse_trashinfo(info_file, location).get('original_path', '')
             if not is_under(original_path, root):
                 left_count += 1
                 continue
@@ -674,7 +772,9 @@ def empty_workspace(trash_dir: Path, root: Path) -> tuple[int, int, list[str]]:
     return deleted_count, left_count, errors
 
 
-def empty_trash(scope: str = 'xdg', workspace_root: str | None = None) -> tuple[int | None, dict]:
+def empty_trash(
+    scope: str = 'xdg', workspace_root: str | None = None, locations=()
+) -> tuple[int | None, dict]:
     """Empty the trash for a scope. Returns the HTTP status and response body.
 
     'xdg' keeps the single-trash response. 'all' empties every existing source
@@ -696,7 +796,7 @@ def empty_trash(scope: str = 'xdg', workspace_root: str | None = None) -> tuple[
 
     root = Path(workspace_root).resolve() if workspace_root else None
     results = []
-    for source in existing_sources():
+    for source in existing_sources(locations):
         entry = {
             'id': source['id'],
             'label': source['label'],
@@ -707,7 +807,9 @@ def empty_trash(scope: str = 'xdg', workspace_root: str | None = None) -> tuple[
             if scope == 'all':
                 entry['deleted_count'], entry['errors'] = empty_source(source['directory'])
             else:
-                deleted, left, errors = empty_workspace(source['directory'], root)
+                deleted, left, errors = empty_workspace(
+                    source['directory'], root, source.get('location')
+                )
                 entry['deleted_count'] = deleted
                 entry['left_count'] = left
                 entry['errors'] = errors
@@ -752,7 +854,8 @@ class TrashEmptyHandler(APIHandler):
                 return
 
         status, body = await tornado.ioloop.IOLoop.current().run_in_executor(
-            None, empty_trash, scope, workspace_root
+            None, empty_trash, scope, workspace_root,
+            self.settings.get('trash_locations', [])
         )
 
         if status is not None:

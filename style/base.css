@@ -235,6 +235,9 @@
 .jp-TrashPanel-list {
   flex: 1;
   overflow-y: auto;
+
+  /* The ring on the active row marks the focus; none around the whole list */
+  outline: none;
 }
 
 /* Individual item row */
@@ -261,13 +264,6 @@
 .jp-TrashPanel-list:focus .jp-TrashPanel-item.jp-mod-active {
   outline: var(--jp-focus-outline-width, 2px) solid var(--jp-ui-font-color0);
   outline-offset: calc(-1 * var(--jp-focus-outline-width, 2px));
-}
-
-/* Disable hover on other items when context menu is open */
-.jp-TrashPanel.jp-mod-contextMenuOpen
-  .jp-TrashPanel-list
-  .jp-TrashPanel-item:not(.jp-mod-selected):hover {
-  background-color: var(--jp-layout-color1);
 }
 
 /* Item columns */
@@ -343,6 +339,12 @@
   overflow-y: auto;
 }
 
+/* With the main list empty the sections take the free height below the empty line */
+.jp-TrashPanel.jp-mod-empty .jp-TrashPanel-sections {
+  flex: 1 1 auto;
+  max-height: none;
+}
+
 .jp-TrashPanel-section {
   display: flex;
   flex-direction: column;
@@ -387,11 +389,24 @@ button.jp-TrashPanel-sectionHeader:focus-visible {
 }
 
 .jp-TrashPanel-sectionLabel {
+  display: flex;
   flex: 1 1 auto;
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.jp-TrashPanel-sectionText {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+/* pre keeps the leading space that separates the count from the label */
+.jp-TrashPanel-sectionCount {
+  flex: 0 0 auto;
+  white-space: pre;
 }
 
 .jp-TrashPanel-sectionList {
@@ -409,6 +424,26 @@ button.jp-TrashPanel-sectionHeader:focus-visible {
   align-items: center;
   height: 22px;
   padding: 0 8px 0 18px;
+}
+
+/* Only a location row (role="option") has a Restore menu, so only it hovers */
+.jp-TrashPanel-sectionRow[role='option']:hover {
+  background: var(--jp-layout-color2);
+}
+
+/* Disable hover on other items when context menu is open */
+.jp-TrashPanel.jp-mod-contextMenuOpen
+  .jp-TrashPanel-list
+  .jp-TrashPanel-item:not(.jp-mod-selected):hover,
+.jp-TrashPanel.jp-mod-contextMenuOpen
+  .jp-TrashPanel-sectionRow[role='option']:hover {
+  background-color: var(--jp-layout-color1);
+}
+
+/* The focused row of a location trash section, ringed as the section header */
+.jp-TrashPanel-sectionRow:focus-visible {
+  outline: 1px solid var(--jp-ui-font-color0);
+  outline-offset: -1px;
 }
 
 .jp-TrashPanel-sectionName {
@@ -440,13 +475,10 @@ button.jp-TrashPanel-sectionHeader:focus-visible {
 
 /* Empty state */
 .jp-TrashPanel-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
-  color: var(--jp-ui-font-color3);
+  padding: 6px 8px 8px;
+  color: var(--jp-ui-font-color2);
+  font-style: italic;
   font-size: var(--jp-ui-font-size0);
-  padding: 12px;
 }
 
 /* Loading ring rotation */

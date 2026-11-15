@@ -82,6 +82,12 @@ REST handlers under `jupyterlab-trash-mgmt-extension/`
   - root-cause: 2026-11-13T07:07:54Z @kj collect_sources called collect_listing, which parses the trashinfo of every entry, builds an item dict per entry and sorts them, and used only item_count and total_size_formatted of the result
   - log: 2026-11-13T07:07:54Z @kj added
   - log: 2026-11-13T07:08:11Z @kj closed
+- [x] `DEF-API-33-MOUNT-BOUNDARY` **Size count and Clean cross into a mount inside a trashed folder** - MAJOR; a trashed folder that holds a real mount point (another device, such as an NFS volume) is walked by get_dir_size, and remove_tree deletes the mounted volume's contents on Clean, Empty Trash or a permanent delete; a symbolic link is already unlinked, not followed
+  - evidence: pytest TestMountBoundary: monkeypatched st_dev and a real tmpfs in bubblewrap; both fail without the size check and without the delete check; review round 2 verdict keep
+  - repro: mount a tmpfs at <root>/data/m, trash <root>/data, Clean All Sources: files inside m are gone
+  - root-cause: 2026-11-14T10:24:36Z @kj get_dir_size and remove_tree recurse with no st_dev check; present at HEAD for the XDG trash as well
+  - log: 2026-11-14T10:24:36Z @kj added
+  - log: 2026-11-14T10:54:00Z @kj closed
 
 ## Trash side panel `PANEL`
 
@@ -213,6 +219,16 @@ Lumino widget in `src/widget.ts`
   - test-tags: UNIT
   - log: 2026-11-13T06:47:00Z @kj added
   - log: 2026-11-13T06:51:13Z @kj closed
+- [x] `DEF-PANEL-34-FOCUS-RING` **Focus ring around the whole list** - MINOR; selecting a row with the mouse gives .jp-TrashPanel-list (tabIndex 0, aria-activedescendant) the focus, and a white focus outline is drawn around the whole list area down to the panel bottom; the active row already carries its own ring
+  - evidence: jest 'rings only the active row of the focused list, never the list (DEF-PANEL-34-FOCUS-RING)' and 'makes the first row of an entered folder active while the list keeps the keyboard focus (DEF-PANEL-34-FOCUS-RING)'; Galata Shift+Tab first-row case passes at retry 0; run wf_3f26d09c-145
+  - test-tags: UNIT, FUNCTIONAL
+  - repro: click a row in the main list; a white rectangle outlines the list area
+  - root-cause: 2026-11-15T19:59:11Z @kj Chromium user-agent rule :focus-visible { outline: auto 1px } draws on the tabIndex 0 .jp-TrashPanel-list, which had no outline rule; it stays after keyboard focus (Tab, or a keyboard-opened menu) followed by a mouse row click; no JupyterLab rule matches the list (CDP getMatchedStylesForNode)
+  - root-cause: 2026-11-15T19:28:23Z @kj likely cause: .jp-TrashPanel-list has no outline rule for :focus, so the default focus outline draws on the container; present at HEAD 7b35eda
+  - log: 2026-11-15T19:28:23Z @kj added
+  - log: 2026-11-15T20:46:25Z @kj edited test-tags added "UNIT, FUNCTIONAL"
+  - log: 2026-11-15T20:46:26Z @kj keyboard focus with no active row makes the first row active, on focus and when the active row leaves the listing (r5-fix-4, r6-fix-1); review round 7 clean
+  - log: 2026-11-15T20:46:32Z @kj closed
 
 ## Test suite `TEST`
 

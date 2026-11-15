@@ -6,6 +6,23 @@ from pathlib import Path
 
 import pytest
 
+from jupyterlab_trash_mgmt_extension import routes
+
+
+@pytest.fixture(autouse=True)
+def isolated_trashes(tmp_path, monkeypatch):
+    """Keep every test away from this machine's trashes.
+
+    HOME, and with it the XDG trash and any '~' location, and the homes root
+    all lie under tmp_path; the server's default '.' location is its temporary
+    root_dir.
+    """
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setattr(routes, "HOMES_ROOT", tmp_path / "homes")
+
 
 @pytest.fixture
 def trash_dir(tmp_path, monkeypatch):

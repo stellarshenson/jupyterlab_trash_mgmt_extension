@@ -4,6 +4,8 @@ import errno
 import json
 import os
 import shutil
+import subprocess
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -441,6 +443,101 @@ class TestRemoveTree:
         assert body == {"success": True}
         assert len(calls) == 2
         assert not folder.exists()
+
+
+def _bwrap_works():
+    if shutil.which("bwrap") is None:
+        return False
+    probe = subprocess.run(
+        ["bwrap", "--dev-bind", "/", "/", "true"], capture_output=True, check=False
+    )
+    return probe.returncode == 0
+
+
+class TestMountBoundary:
+    """DEF-API-33: a mount inside a trashed folder is neither counted nor deleted."""
+
+    @pytest.fixture
+    def layout(self, trash_dir, tmp_path):
+        """A trashed folder holding files, a mount point and a link to a folder outside."""
+        folder = trash_dir / "files" / "project"
+        mount = folder / "data" / "mnt"
+        mount.mkdir(parents=True)
+        (folder / "data" / "sibling.bin").write_bytes(b"\0" * 10)
+        (folder / "top.bin").write_bytes(b"\0" * 5)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "kept.txt").write_text("x")
+        (folder / "link").symlink_to(outside)
+        info = trash_dir / "info" / "project.trashinfo"
+        info.write_text("[Trash Info]\nPath=/home/user/project\n")
+        own_size = 15 + (folder / "link").lstat().st_size
+        return folder, mount, outside, info, own_size
+
+    def assert_left_in_trash(self, layout):
+        folder, mount, outside, info, _ = layout
+        assert mount.is_dir() and info.exists()
+        assert not (folder / "top.bin").exists()
+        assert not (folder / "data" / "sibling.bin").exists()
+        assert not os.path.lexists(folder / "link")
+        assert (outside / "kept.txt").exists()
+
+    def test_size_and_delete_stop_at_another_st_dev(self, layout, monkeypatch):
+        """A monkeypatched st_dev stands in for a mount when no sandbox is needed."""
+        folder, mount, _, _, own_size = layout
+        (mount / "inside.bin").write_bytes(b"\0" * 100)
+        real_lstat = os.lstat
+
+        def lstat(path, *args, **kwargs):
+            st = real_lstat(path, *args, **kwargs)
+            if os.fspath(path) == str(mount):
+                return os.stat_result((st.st_mode, st.st_ino, st.st_dev + 1, *st[3:]))
+            return st
+
+        monkeypatch.setattr(routes.os, "lstat", lstat)
+
+        assert get_dir_size(folder) == own_size
+        status, body = delete_item("project")
+
+        assert status == 500
+        assert body == {"error": f"{mount}: holds a mount point, left in the trash"}
+        assert (mount / "inside.bin").exists()
+        self.assert_left_in_trash(layout)
+
+    @pytest.mark.skipif(
+        not _bwrap_works(), reason="bwrap or unprivileged user namespaces are missing"
+    )
+    def test_size_and_empty_stop_at_a_real_tmpfs(self, trash_dir, layout):
+        """A tmpfs mounted in a bubblewrap sandbox is a real second device."""
+        folder, mount, _, _, own_size = layout
+        script = (
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "from jupyterlab_trash_mgmt_extension.routes import empty_source, get_dir_size\n"
+            "trash, mount = Path(sys.argv[1]), Path(sys.argv[2])\n"
+            "(mount / 'inside.bin').write_bytes(b'0' * 100)\n"
+            "size = get_dir_size(trash / 'files' / 'project')\n"
+            "deleted, errors = empty_source(trash)\n"
+            "print(json.dumps([size, deleted, errors, (mount / 'inside.bin').exists()]))\n"
+        )
+        run = subprocess.run(
+            [
+                "bwrap", "--dev-bind", "/", "/", "--tmpfs", str(mount), "--die-with-parent",
+                "--", sys.executable, "-c", script, str(trash_dir), str(mount),
+            ],
+            cwd=Path(__file__).parents[2],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        )
+
+        size, deleted, errors, inside_kept = json.loads(run.stdout)
+        assert size == own_size
+        assert deleted == 0
+        assert errors == [f"project: {mount}: holds a mount point, left in the trash"]
+        assert inside_kept
+        self.assert_left_in_trash(layout)
 
 
 class TestTrashSources:
