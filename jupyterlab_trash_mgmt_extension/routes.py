@@ -491,11 +491,16 @@ def collect_sources(locations=()) -> list[dict]:
     return sources
 
 
-def collect_source_listing(source_id: str, folder: str, locations=()) -> tuple[int | None, dict]:
-    """The /list response for one source id."""
-    candidate = next(
+def find_source(source_id, locations=()) -> dict | None:
+    """The candidate with this source id, or None for an unknown id."""
+    return next(
         (item for item in source_candidates(locations) if item['id'] == source_id), None
     )
+
+
+def collect_source_listing(source_id: str, folder: str, locations=()) -> tuple[int | None, dict]:
+    """The /list response for one source id."""
+    candidate = find_source(source_id, locations)
     if candidate is None:
         return 400, {'error': 'Unknown trash source'}
 
@@ -567,9 +572,7 @@ def restore_item(
     trash_dir = None
     location = None
     if source_id is not None:
-        candidate = next(
-            (item for item in source_candidates(locations) if item['id'] == source_id), None
-        )
+        candidate = find_source(source_id, locations)
         if candidate is None:
             return 400, {'error': 'Unknown trash source'}
         trash_dir = resolve_source(candidate)
@@ -640,14 +643,29 @@ class TrashRestoreHandler(APIHandler):
         self.finish(json.dumps(body))
 
 
-def delete_item(trash_path: str) -> tuple[int | None, dict]:
-    """Permanently delete one trashed entry. Returns the HTTP status and body."""
+def delete_item(
+    trash_path: str, source_id: str | None = None, locations=()
+) -> tuple[int | None, dict]:
+    """Permanently delete one trashed entry. Returns the HTTP status and body.
+
+    Without a source id the entry is in the XDG trash; with one it is in
+    that source's trash.
+    """
+    trash_dir = None
+    if source_id is not None:
+        candidate = find_source(source_id, locations)
+        if candidate is None:
+            return 400, {'error': 'Unknown trash source'}
+        trash_dir = resolve_source(candidate)
+        if trash_dir is None:
+            return 404, {'error': 'Item not found in trash'}
+
     try:
-        target = resolve_trash_path(trash_path)
+        target = resolve_trash_path(trash_path, trash_dir)
     except ValueError as e:
         return 400, {'error': str(e)}
 
-    info_file = get_trash_dir() / 'info' / f"{trash_path}.trashinfo"
+    info_file = (trash_dir or get_trash_dir()) / 'info' / f"{trash_path}.trashinfo"
 
     if not target.exists() and not target.is_symlink():
         return 404, {'error': 'Item not found in trash'}
@@ -663,7 +681,7 @@ def delete_item(trash_path: str) -> tuple[int | None, dict]:
     except Exception as e:
         return 500, {'error': str(e)}
     finally:
-        invalidate_dir_size(target)
+        invalidate_dir_size(target, trash_dir)
 
 
 class TrashDeleteHandler(APIHandler):
@@ -680,7 +698,8 @@ class TrashDeleteHandler(APIHandler):
             return
 
         status, body = await tornado.ioloop.IOLoop.current().run_in_executor(
-            None, delete_item, trash_path
+            None, delete_item, trash_path, data.get('source'),
+            self.settings.get('trash_locations', [])
         )
 
         if status is not None:
@@ -773,16 +792,28 @@ def empty_workspace(
 
 
 def empty_trash(
-    scope: str = 'xdg', workspace_root: str | None = None, locations=()
+    scope: str = 'xdg', workspace_root: str | None = None, locations=(),
+    source_id: str | None = None
 ) -> tuple[int | None, dict]:
     """Empty the trash for a scope. Returns the HTTP status and response body.
 
-    'xdg' keeps the single-trash response. 'all' empties every existing source
-    and 'workspace' deletes only each source's entries under the workspace root.
+    'xdg' keeps the single-trash response, and 'source' gives it for the one
+    source with source_id. 'all' empties every existing source and 'workspace'
+    deletes only each source's entries under the workspace root.
     """
-    if scope == 'xdg':
-        deleted_count, errors = empty_source(get_trash_dir())
-        clear_dir_sizes()
+    if scope in ('xdg', 'source'):
+        trash_dir = get_trash_dir()
+        if scope == 'source':
+            candidate = find_source(source_id, locations)
+            if candidate is None:
+                return 400, {'error': 'Unknown trash source'}
+            trash_dir = resolve_source(candidate)
+        if trash_dir:
+            deleted_count, errors = empty_source(trash_dir)
+            # Only this trash changed, so the other sources keep their cached sizes
+            invalidate_dir_size(trash_dir / 'files', trash_dir)
+        else:
+            deleted_count, errors = 0, []
         if errors:
             return None, {
                 'success': False,
@@ -837,7 +868,7 @@ class TrashEmptyHandler(APIHandler):
         data = json.loads(self.request.body) if self.request.body else {}
         scope = data.get('scope', 'xdg')
 
-        if scope not in ('xdg', 'all', 'workspace'):
+        if scope not in ('xdg', 'source', 'all', 'workspace'):
             self.set_status(400)
             self.finish(json.dumps({'error': f'Unknown scope: {scope}'}))
             return
@@ -855,7 +886,7 @@ class TrashEmptyHandler(APIHandler):
 
         status, body = await tornado.ioloop.IOLoop.current().run_in_executor(
             None, empty_trash, scope, workspace_root,
-            self.settings.get('trash_locations', [])
+            self.settings.get('trash_locations', []), data.get('source')
         )
 
         if status is not None:

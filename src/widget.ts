@@ -39,6 +39,39 @@ function saveCollapsed(collapsed: Set<string>): void {
   }
 }
 
+// The localStorage key of the Show Volumes choice; off unless it reads true
+const SHOW_VOLUMES_KEY =
+  '@stellarshenson/jupyterlab-trash-mgmt-extension:panel:show-volumes';
+
+function loadShowVolumes(): boolean {
+  try {
+    return (
+      JSON.parse(window.localStorage.getItem(SHOW_VOLUMES_KEY) ?? '') === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+function saveShowVolumes(on: boolean): void {
+  try {
+    window.localStorage.setItem(SHOW_VOLUMES_KEY, JSON.stringify(on));
+  } catch {
+    // Storage blocked or full: the choice lasts until the page reloads.
+  }
+}
+
+/** A byte count in the server's format_size form. */
+function formatSize(bytes: number): string {
+  for (const unit of ['B', 'KB', 'MB', 'GB', 'TB']) {
+    if (bytes < 1024) {
+      return unit === 'B' ? `${bytes} B` : `${bytes.toFixed(1)} ${unit}`;
+    }
+    bytes /= 1024;
+  }
+  return `${bytes.toFixed(1)} PB`;
+}
+
 /**
  * The row an arrow, Home or End key moves to in a list of `count` rows, or
  * null for any other key. Without an active row the arrows start at an end.
@@ -64,6 +97,32 @@ function movedIndex(key: string, index: number, count: number): number | null {
   return Math.max(0, Math.min(target, count - 1));
 }
 
+/**
+ * True when a recorded original path lies at or below root, as the server's
+ * is_under reads it.
+ * shortcut: compares the text only, so a row under a symlinked root stays
+ * until its source's fresh listing answers; resolve paths if that shows.
+ */
+function isUnder(path: string, root: string): boolean {
+  const base = root.replace(/\/+$/, '');
+  return path === base || path.startsWith(`${base}/`);
+}
+
+/**
+ * Hide or show a button. A button that hides while it holds the focus hands
+ * it to `next` first, so the focus stays in the panel, never on the page body.
+ */
+function setHidden(
+  button: HTMLElement,
+  hidden: boolean,
+  next: HTMLElement
+): void {
+  if (hidden && button === document.activeElement) {
+    next.focus();
+  }
+  button.hidden = hidden;
+}
+
 /** Shift+F10 and the ContextMenu key open a row menu. */
 function isMenuKey(e: KeyboardEvent): boolean {
   return e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey);
@@ -83,6 +142,15 @@ interface ITrashItem {
   size_formatted: string;
   is_dir: boolean;
   is_symlink: boolean;
+  // The source of a row that is not in the XDG trash
+  source?: string;
+}
+
+/** A row's identity: its trash path, after its source outside the XDG trash. */
+function rowKey(item: ITrashItem): string {
+  return item.source === undefined
+    ? item.trash_path
+    : `${item.source}\0${item.trash_path}`;
 }
 
 interface ITrashListResponse {
@@ -120,6 +188,7 @@ interface ICleanResponse {
 interface ISectionParts {
   section: HTMLDivElement;
   header: HTMLButtonElement;
+  empty: HTMLButtonElement;
   caret: HTMLSpanElement;
   label: HTMLSpanElement;
   list: HTMLDivElement;
@@ -134,6 +203,7 @@ export class TrashWidget extends Widget {
   private _header: HTMLDivElement;
   private _summary: HTMLDivElement;
   private _summaryText: HTMLSpanElement;
+  private _summaryEmpty: HTMLButtonElement;
   private _breadcrumb: HTMLDivElement;
   private _columnHeader: HTMLDivElement;
   private _list: HTMLDivElement;
@@ -146,10 +216,11 @@ export class TrashWidget extends Widget {
   // True while the menu opened from the keyboard is showing
   private _menuOpenedByKeyboard = false;
   private _selectedItems: Set<ITrashItem> = new Set();
-  // The row a shift-click ranges from, held by path because sorting moves rows
+  // The row a shift-click ranges from, held by row key because sorting moves
+  // rows
   private _lastClickedAnchor: string | null = null;
-  // The row arrow navigation treats as current, held by path because sorting
-  // and every reload rebuild the rows
+  // The row arrow navigation treats as current, held by row key because
+  // sorting and every reload rebuild the rows
   private _activePath: string | null = null;
   private _itemElements: Map<ITrashItem, HTMLElement> = new Map();
   private _items: ITrashItem[] = [];
@@ -160,6 +231,15 @@ export class TrashWidget extends Widget {
   private _serverSettings: ServerConnection.ISettings;
   // Segments of the folder in view; empty at the top level of the trash
   private _path: string[] = [];
+  // The source of the folder in view; 'xdg' at the top level
+  private _pathSource = 'xdg';
+  // The last main listing, its rows tagged with their source
+  private _mainList: ITrashListResponse = {
+    items: [],
+    total_size: 0,
+    total_size_formatted: formatSize(0),
+    item_count: 0
+  };
   // False until the first list has arrived
   private _loaded = false;
   // List requests in flight, the sequence number of the newest one, when each
@@ -171,6 +251,7 @@ export class TrashWidget extends Widget {
   // The folder the newest request asked for, so the background chase retries
   // the pending location rather than the one under it
   private _requestPath: string[] = [];
+  private _requestSource = 'xdg';
   // Tokens of the warm refreshes in flight; each keeps the button marked busy
   // until it settles
   private _warmTokens: Set<symbol> = new Set();
@@ -180,20 +261,31 @@ export class TrashWidget extends Widget {
   // The extra trash sources, one collapsible section each, below the main list
   private _sectionsEl: HTMLDivElement;
   private _sources: ITrashSource[] = [];
-  // Set while a /sources request runs, so a refresh does not send a second one
-  private _sourcesPending = false;
+  // Raised by every action that changes the trash; a /sources or source
+  // listing answer that started under an older value predates the change and
+  // is dropped
+  private _trashGen = 0;
+  // The generation of the /sources request in flight; a refresh in the same
+  // generation sends none, an action sends a new one
+  private _sourcesGen: number | null = null;
+  // False until the first /sources request has settled
+  private _sourcesSettled = false;
   private _sectionParts: Map<string, ISectionParts> = new Map();
   // What each section's own listing request returned, or the error it raised
   private _sectionListings: Map<string, ITrashListResponse | Error> = new Map();
-  // Sections whose listing request is in flight, or answered, for this load
-  private _sectionPending: Set<string> = new Set();
+  // Sources whose listing request is in flight, with its generation, or
+  // answered for this load; a request in flight is not sent again in its
+  // generation, while an action sends a new one beside it and the older
+  // answer is dropped
+  private _sectionPending: Map<string, number> = new Map();
   private _sectionFetched: Set<string> = new Set();
-  // Bumped on every sources answer, so an older listing answer is ignored
-  private _sectionGen = 0;
   private _collapsed = loadCollapsed();
-  // The Restore menu of a location section row, the row it was opened on,
-  // and the active row of each location section, held by path because every
-  // listing answer rebuilds the rows
+  // Off: no sections, and the top level merges every source into the main list
+  private _showVolumes = loadShowVolumes();
+  private _headerMenu: Menu;
+  // The Restore menu of a section row, the row it was opened on, and the
+  // active row of each section, held by path because every listing answer
+  // rebuilds the rows
   private _sectionMenu: Menu;
   private _sectionTarget: { source: string; item: ITrashItem } | null = null;
   private _sectionActive: Map<string, string> = new Map();
@@ -254,7 +346,7 @@ export class TrashWidget extends Widget {
     this._emptyBtn.title = trans.__('Empty Trash');
     this._emptyBtn.hidden = true;
     trashIcon.element({ container: this._emptyBtn });
-    this._emptyBtn.addEventListener('click', () => this._emptyTrash());
+    this._emptyBtn.addEventListener('click', () => this._cleanSources('all'));
     this._header.appendChild(this._emptyBtn);
 
     // Refresh is appended last, so it is the rightmost icon
@@ -267,6 +359,14 @@ export class TrashWidget extends Widget {
 
     this.node.appendChild(this._header);
 
+    this._headerMenu = new Menu({ commands: this._commands });
+    this._headerMenu.addItem({ command: 'trash:show-volumes' });
+    this._header.addEventListener('contextmenu', (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._headerMenu.open(e.clientX, e.clientY);
+    });
+
     // Create summary bar: item count and total size of the listed location.
     // The bar wraps, so both readouts stay visible.
     this._summary = document.createElement('div');
@@ -274,6 +374,16 @@ export class TrashWidget extends Widget {
     this._summaryText = document.createElement('span');
     this._summaryText.className = 'jp-TrashPanel-summaryText';
     this._summary.appendChild(this._summaryText);
+    // Show Volumes on: the band button of the XDG trash, at the bar's right end
+    this._summaryEmpty = document.createElement('button');
+    this._summaryEmpty.type = 'button';
+    this._summaryEmpty.className = 'jp-TrashPanel-sectionEmpty';
+    this._summaryEmpty.hidden = true;
+    trashIcon.element({ container: this._summaryEmpty });
+    this._summaryEmpty.addEventListener('click', () =>
+      this._emptySource('xdg')
+    );
+    this._summary.appendChild(this._summaryEmpty);
     this.node.appendChild(this._summary);
 
     // Create breadcrumb row: shown only inside a folder
@@ -286,6 +396,8 @@ export class TrashWidget extends Widget {
     this._columnHeader = document.createElement('div');
     this._columnHeader.className = 'jp-TrashPanel-columnHeader';
     this.node.appendChild(this._columnHeader);
+    // Another source's rows may arrive before the first main listing
+    this._renderColumnHeader();
 
     // Create list container. It is the single tab stop of the keyboard model:
     // rows are options exposed through aria-activedescendant, never tabindex.
@@ -382,6 +494,13 @@ export class TrashWidget extends Widget {
       }
     });
 
+    this._commands.addCommand('trash:show-volumes', {
+      describedBy: { args: { type: 'object', properties: {} } },
+      label: trans.__('Show Volumes'),
+      isToggled: () => this._showVolumes,
+      execute: () => this.toggleShowVolumes()
+    });
+
     this._commands.addCommand('trash:clean-all', {
       describedBy: { args: { type: 'object', properties: {} } },
       label: trans.__('Clean All Sources'),
@@ -399,11 +518,32 @@ export class TrashWidget extends Widget {
     });
   }
 
+  /** True while the sources show as sections below the XDG trash. */
+  get showVolumes(): boolean {
+    return this._showVolumes;
+  }
+
+  /**
+   * Show or hide the source sections and save the choice. The main list
+   * turns into the XDG trash or the merged list, so a folder of another
+   * source is left for the top level.
+   */
+  toggleShowVolumes(): void {
+    this._showVolumes = !this._showVolumes;
+    saveShowVolumes(this._showVolumes);
+    this._renderSections();
+    this._paintEmptyBtn();
+    void this.refresh(this._pathSource === 'xdg' ? this._path : [], 'xdg');
+  }
+
   /**
    * Reload the panel on a user action. Lists the folder in view unless
    * another location is given.
    */
-  async refresh(path: string[] = this._path): Promise<void> {
+  async refresh(
+    path: string[] = this._path,
+    source: string = this._pathSource
+  ): Promise<void> {
     // The veil covers the whole panel, header included, so it is raised only
     // while there is no list to show yet.
     const cold = !this._loaded;
@@ -419,7 +559,7 @@ export class TrashWidget extends Widget {
       }
     }
     try {
-      await this._loadTrashContents(path);
+      await this._loadTrashContents(path, source);
     } catch (error) {
       console.error('Failed to load trash:', error);
       showErrorMessage('Trash Error', 'Failed to load trash contents');
@@ -480,7 +620,7 @@ export class TrashWidget extends Widget {
       // The pending load is stale. Chase the folder the newest request asked
       // for, so a pending folder open is retried.
       try {
-        await this._loadTrashContents(this._requestPath);
+        await this._loadTrashContents(this._requestPath, this._requestSource);
       } catch (error) {
         console.error('Failed to load trash:', error);
       }
@@ -496,13 +636,20 @@ export class TrashWidget extends Widget {
   /**
    * Request the listing of a location. A folder that no longer exists
    * answers 404; its nearest existing parent is listed in its place, and
-   * `path` is shortened to that parent.
+   * `path` is shortened to that parent. The source applies inside a folder;
+   * the top level is the XDG trash.
    */
-  private async _fetchList(path: string[]): Promise<ITrashListResponse> {
+  private async _fetchList(
+    path: string[],
+    source: string
+  ): Promise<ITrashListResponse> {
+    const folder = encodeURIComponent(path.join('/'));
     const endPoint =
-      path.length > 0
-        ? `list?path=${encodeURIComponent(path.join('/'))}`
-        : 'list';
+      path.length === 0
+        ? 'list'
+        : source === 'xdg'
+          ? `list?path=${folder}`
+          : `list?source=${encodeURIComponent(source)}&path=${folder}`;
     try {
       return await requestAPI<ITrashListResponse>(
         endPoint,
@@ -513,7 +660,7 @@ export class TrashWidget extends Widget {
         throw error;
       }
       path.pop();
-      return this._fetchList(path);
+      return this._fetchList(path, source);
     }
   }
 
@@ -521,9 +668,14 @@ export class TrashWidget extends Widget {
    * Load a location from the API and render it. Defaults to the folder in
    * view.
    */
-  private async _loadTrashContents(path: string[] = this._path): Promise<void> {
+  private async _loadTrashContents(
+    path: string[] = this._path,
+    source: string = this._pathSource
+  ): Promise<void> {
     const seq = ++this._loadSeq;
+    const gen = this._trashGen;
     this._requestPath = [...path];
+    this._requestSource = source;
     // Each pending load keeps its own start, so a settled load drops out of
     // the stale measure instead of carrying its age into the next one.
     this._loadStarts.set(seq, Date.now());
@@ -534,7 +686,7 @@ export class TrashWidget extends Widget {
     // Sources load alongside the listing; their sections never hold it back
     void this._loadSources();
     try {
-      data = await this._fetchList(target);
+      data = await this._fetchList(target, source);
     } finally {
       // The newest load owns the mark: when it ends, the list shown is final
       // even while an older request is still pending.
@@ -547,58 +699,135 @@ export class TrashWidget extends Widget {
     // A load older than the one already shown is stale; a load older than a
     // newer request still renders when it answers the newest requested
     // location, which is the chased folder a pending open is waiting for.
-    if (seq < this._renderedSeq) {
+    // A listing that started before a change to the trash is stale too
+    if (seq < this._renderedSeq || gen !== this._trashGen) {
       return;
     }
     if (
       seq < this._loadSeq &&
-      target.join('/') !== this._requestPath.join('/')
+      (target.join('/') !== this._requestPath.join('/') ||
+        source !== this._requestSource)
     ) {
       return;
     }
     this._renderedSeq = seq;
+    // The 404 fallback may have reached the top level, which is the XDG trash
+    const listed = target.length > 0 ? source : 'xdg';
 
-    // The selection and the shift-click anchor are kept by trash path while
+    // The selection and the shift-click anchor are kept by row key while
     // the location stays the same; a move to another folder clears both.
-    const sameLocation = target.join('/') === this._path.join('/');
-    const selected = new Set(
-      sameLocation ? [...this._selectedItems].map(item => item.trash_path) : []
-    );
-    const anchor = sameLocation ? this._lastClickedAnchor : null;
+    if (
+      target.join('/') !== this._path.join('/') ||
+      listed !== this._pathSource
+    ) {
+      this._selectedItems.clear();
+      this._lastClickedAnchor = null;
+    }
 
     // The first successful render lowers the veil however the load started; a
     // cold refresh whose request hangs never reaches its own finally.
     const firstRender = !this._loaded;
     this._path = target;
+    this._pathSource = listed;
     this._loaded = true;
     if (firstRender) {
       this._setLoading(false);
     }
-    this._items = data.items;
-    this._selectedItems = new Set(
-      this._items.filter(item => selected.has(item.trash_path))
-    );
-    this._renderSummary(data);
+    this._mainList =
+      listed === 'xdg'
+        ? data
+        : {
+            ...data,
+            items: data.items.map(item => ({ ...item, source: listed }))
+          };
     const hadCrumbFocus = this._renderBreadcrumb();
     this._renderColumnHeader();
-    this._renderItems();
+    this._renderMain();
     // A crumb that is gone or no longer focusable still held the focus; the
     // new location takes it, so the keyboard continues from its list.
     if (hadCrumbFocus) {
       this._focusListOrRefresh();
     }
-    this._lastClickedAnchor =
-      anchor !== null && this._items.some(item => item.trash_path === anchor)
-        ? anchor
-        : null;
+  }
+
+  /**
+   * Draw the main list from the last main listing. At the top level with
+   * Show Volumes off, the rows of every other source's own listing join it,
+   * and the summary counts and sizes them all.
+   */
+  private _renderMain(): void {
+    const merged = !this._showVolumes && this._path.length === 0;
+    const items = [...this._mainList.items];
+    let totalSize = this._mainList.total_size;
+    for (const source of merged ? this._sources : []) {
+      const listing = this._sectionListings.get(source.id);
+      if (
+        source.id !== 'xdg' &&
+        !source.error &&
+        listing !== undefined &&
+        !(listing instanceof Error)
+      ) {
+        items.push(
+          ...listing.items.map(item => ({ ...item, source: source.id }))
+        );
+        totalSize += listing.total_size;
+      }
+    }
+    // A source answering before the XDG trash shows its rows at once
+    if (!this._loaded && items.length > 0) {
+      this._setLoading(false);
+    }
+    const kept = new Set([...this._selectedItems].map(rowKey));
+    this._items = items;
+    this._selectedItems = new Set(items.filter(item => kept.has(rowKey(item))));
+    if (!items.some(item => rowKey(item) === this._lastClickedAnchor)) {
+      this._lastClickedAnchor = null;
+    }
+    // Without another source's rows the summary keeps the server's own text
+    this._renderSummary(
+      items.length === this._mainList.items.length
+        ? this._mainList
+        : {
+            items,
+            item_count: items.length,
+            total_size: totalSize,
+            total_size_formatted: formatSize(totalSize)
+          }
+    );
+    this._renderItems();
   }
 
   private _renderSummary(data: ITrashListResponse): void {
     const count = data.item_count;
     const noun = count === 1 ? 'item' : 'items';
     this._summaryText.textContent = `${count} ${noun} \u00B7 ${data.total_size_formatted}`;
+    this._paintEmptyBtn(count);
+  }
+
+  /**
+   * The header trash button empties every source, so it shows while any holds
+   * an item. With Show Volumes on, the summary bar button empties the XDG
+   * trash alone and shows while the main list holds an item.
+   */
+  private _paintEmptyBtn(count = this._mainList.item_count): void {
     // Inside a folder the trash holds at least that folder
-    this._emptyBtn.hidden = this._path.length === 0 && count === 0;
+    setHidden(
+      this._emptyBtn,
+      this._path.length === 0 &&
+        count === 0 &&
+        this._sources.every(source => source.item_count === 0),
+      this._refreshBtn
+    );
+    const xdg = this._sources.find(source => source.id === 'xdg');
+    if (xdg !== undefined) {
+      this._summaryEmpty.title = trans.__('Empty Trash in %1', xdg.label);
+    }
+    // A list left empty hides too and hands the focus to the refresh button
+    setHidden(
+      this._summaryEmpty,
+      !this._showVolumes || count === 0 || xdg === undefined,
+      this._list
+    );
   }
 
   /**
@@ -606,10 +835,11 @@ export class TrashWidget extends Widget {
    * does not wait for this request.
    */
   private async _loadSources(): Promise<void> {
-    if (this._sourcesPending) {
+    const gen = this._trashGen;
+    if (this._sourcesGen === gen) {
       return;
     }
-    this._sourcesPending = true;
+    this._sourcesGen = gen;
     let sources: ITrashSource[];
     try {
       sources = await requestAPI<ITrashSource[]>(
@@ -620,15 +850,31 @@ export class TrashWidget extends Widget {
       console.warn('Failed to load trash sources:', error);
       return;
     } finally {
-      this._sourcesPending = false;
+      this._sourcesSettled = true;
+      if (this._sourcesGen === gen) {
+        this._sourcesGen = null;
+      }
     }
-    // The guard lets one /sources request run at a time, so its answer is the newest
+    // An answer that started before a change to the trash is stale
+    if (gen !== this._trashGen) {
+      return;
+    }
     this._sources = sources;
-    // Every load refreshes each section's own listing
-    this._sectionGen++;
-    this._sectionPending.clear();
+    // Every load refreshes each source's own listing
     this._sectionFetched.clear();
     this._renderSections();
+    this._paintEmptyBtn();
+    if (!this._showVolumes) {
+      // The merged list lists every other source; each joins as it answers
+      for (const source of sources) {
+        if (source.id !== 'xdg' && !source.error) {
+          void this._loadSectionList(source);
+        }
+      }
+      if (this._path.length === 0) {
+        this._renderMain();
+      }
+    }
   }
 
   /**
@@ -638,8 +884,10 @@ export class TrashWidget extends Widget {
   private _renderSections(): void {
     const previous = new Map(this._sectionParts);
     this._sectionParts.clear();
-    // The xdg trash stays the main section above
-    const sources = this._sources.filter(source => source.id !== 'xdg');
+    // The xdg trash stays the main section above; Show Volumes off draws none
+    const sources = this._showVolumes
+      ? this._sources.filter(source => source.id !== 'xdg')
+      : [];
     sources.forEach((source, index) => {
       const parts = previous.get(source.id) ?? this._createSection(source);
       previous.delete(source.id);
@@ -660,6 +908,11 @@ export class TrashWidget extends Widget {
     const section = document.createElement('div');
     section.className = 'jp-TrashPanel-section';
     section.dataset.source = source.id;
+
+    // The band holds the fold toggle and the trash button as siblings, so a
+    // trash click or key never reaches the toggle
+    const band = document.createElement('div');
+    band.className = 'jp-TrashPanel-sectionBand';
 
     // A native button takes the focus and the Enter / Space activation
     const header = document.createElement('button');
@@ -685,35 +938,41 @@ export class TrashWidget extends Widget {
       this._toggleSection(source.id);
     });
 
+    const empty = document.createElement('button');
+    empty.type = 'button';
+    empty.className = 'jp-TrashPanel-sectionEmpty';
+    empty.title = trans.__('Empty Trash in %1', source.label);
+    trashIcon.element({ container: empty });
+    empty.addEventListener('click', () => this._emptySource(source.id));
+    band.append(header, empty);
+
     const list = document.createElement('div');
     list.className = 'jp-TrashPanel-sectionList';
-    // A location trash's rows restore; the list is one tab stop whose arrows
-    // move the active row and whose focused row is the active one
-    if (source.id.startsWith('location:')) {
-      list.setAttribute('role', 'listbox');
-      list.setAttribute('aria-label', source.label);
-      list.addEventListener('keydown', (e: KeyboardEvent) => {
-        const rows = Array.from(list.children) as HTMLElement[];
-        const moved = movedIndex(
-          e.key,
-          rows.findIndex(row => row.tabIndex === 0),
-          rows.length
-        );
-        if (moved === null || rows.length === 0) {
-          return;
-        }
-        e.preventDefault();
-        e.stopPropagation();
-        rows[moved].focus();
-        rows[moved].scrollIntoView?.({ block: 'nearest' });
-      });
-      list.addEventListener('focusin', (e: FocusEvent) =>
-        this._activateSectionRow(source.id, list, e.target as HTMLElement)
+    // Every trash's rows restore; the list is one tab stop whose arrows move
+    // the active row and whose focused row is the active one
+    list.setAttribute('role', 'listbox');
+    list.setAttribute('aria-label', source.label);
+    list.addEventListener('keydown', (e: KeyboardEvent) => {
+      const rows = Array.from(list.children) as HTMLElement[];
+      const moved = movedIndex(
+        e.key,
+        rows.findIndex(row => row.tabIndex === 0),
+        rows.length
       );
-    }
+      if (moved === null || rows.length === 0) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      rows[moved].focus();
+      rows[moved].scrollIntoView?.({ block: 'nearest' });
+    });
+    list.addEventListener('focusin', (e: FocusEvent) =>
+      this._activateSectionRow(source.id, list, e.target as HTMLElement)
+    );
 
-    section.append(header, list);
-    return { section, header, caret, label, list };
+    section.append(band, list);
+    return { section, header, empty, caret, label, list };
   }
 
   private _toggleSection(id: string): void {
@@ -738,6 +997,7 @@ export class TrashWidget extends Widget {
     parts.header.setAttribute('aria-expanded', String(expanded));
     parts.caret.textContent = expanded ? '▾' : '▸';
     parts.list.hidden = !expanded;
+    setHidden(parts.empty, source.item_count === 0, parts.header);
 
     const cached = this._sectionListings.get(source.id);
     const error =
@@ -745,14 +1005,17 @@ export class TrashWidget extends Widget {
     // The label or the error takes the ellipsis; the count and size never shrink
     const text = document.createElement('span');
     text.className = 'jp-TrashPanel-sectionText';
+    text.textContent = error
+      ? trans.__('%1: %2', source.label, error)
+      : source.label;
+    // The ellipsis can hide the label's end; the tooltip carries all of it
+    text.title = text.textContent;
     if (error) {
-      text.textContent = trans.__('%1: %2', source.label, error);
       parts.label.replaceChildren(text);
       parts.list.innerHTML = '';
       parts.key = undefined;
       return;
     }
-    text.textContent = source.label;
     const count = document.createElement('span');
     count.className = 'jp-TrashPanel-sectionCount';
     count.textContent = this._sourceCount(source);
@@ -782,14 +1045,8 @@ export class TrashWidget extends Widget {
     parts.key = key;
     const hadFocus = parts.list.contains(document.activeElement);
     parts.list.innerHTML = '';
-    const restorable = source.id.startsWith('location:');
     for (const item of cached.items) {
-      parts.list.appendChild(
-        this._sectionRow(item, restorable ? source.id : null)
-      );
-    }
-    if (!restorable) {
-      return;
+      parts.list.appendChild(this._sectionRow(item, source.id));
     }
     // The rebuilt rows keep the active row and the focus it held
     const rows = Array.from(parts.list.children) as HTMLElement[];
@@ -803,7 +1060,7 @@ export class TrashWidget extends Widget {
     }
   }
 
-  /** Make one row of a location section the tab stop of its list. */
+  /** Make one row of a section the tab stop of its list. */
   private _activateSectionRow(
     source: string,
     list: HTMLElement,
@@ -817,7 +1074,7 @@ export class TrashWidget extends Widget {
     }
   }
 
-  /** Open the Restore menu of a location section row at a point. */
+  /** Open the Restore menu of a section row at a point. */
   private _openSectionMenu(
     source: string,
     item: ITrashItem,
@@ -834,7 +1091,7 @@ export class TrashWidget extends Widget {
   }
 
   /**
-   * Restore one entry of a location trash to its original path. Success
+   * Restore one entry of a section's trash to its original path. Success
    * reloads the source counts and the section listings; a failure, such as
    * an existing destination, is reported the way the main list reports it.
    */
@@ -864,7 +1121,11 @@ export class TrashWidget extends Widget {
       } else {
         this._sectionActive.set(source, next);
       }
-      await this._loadSources();
+      // A section row restores out of its own trash only
+      this._reloadChanged(
+        (id, row) => id === source && row.trash_path === item.trash_path,
+        false
+      );
     } catch (error: any) {
       showErrorMessage(
         'Restore Failed',
@@ -876,16 +1137,16 @@ export class TrashWidget extends Widget {
   }
 
   /**
-   * Fetch one source's listing. The section renders as soon as this answer
-   * arrives, whatever the other sources are doing.
+   * Fetch one source's listing. The section, or the merged list, renders as
+   * soon as this answer arrives, whatever the other sources are doing.
    */
   private async _loadSectionList(source: ITrashSource): Promise<void> {
     const id = source.id;
-    if (this._sectionPending.has(id) || this._sectionFetched.has(id)) {
+    const gen = this._trashGen;
+    if (this._sectionPending.get(id) === gen || this._sectionFetched.has(id)) {
       return;
     }
-    this._sectionPending.add(id);
-    const gen = this._sectionGen;
+    this._sectionPending.set(id, gen);
     let result: ITrashListResponse | Error;
     try {
       result = await requestAPI<ITrashListResponse>(
@@ -896,10 +1157,13 @@ export class TrashWidget extends Widget {
       result =
         error instanceof Error ? error : new Error(String(error?.message));
     }
-    if (gen !== this._sectionGen) {
+    if (this._sectionPending.get(id) === gen) {
+      this._sectionPending.delete(id);
+    }
+    // An answer that started before a change to the trash is stale
+    if (gen !== this._trashGen) {
       return;
     }
-    this._sectionPending.delete(id);
     this._sectionFetched.add(id);
     this._sectionListings.set(id, result);
     const parts = this._sectionParts.get(id);
@@ -907,48 +1171,40 @@ export class TrashWidget extends Widget {
     if (parts !== undefined && current !== undefined) {
       this._paintSection(current, parts);
     }
+    // Before the first main listing the top level is the merged list too
+    if (!this._showVolumes && this._path.length === 0) {
+      this._renderMain();
+    }
   }
 
-  /** One section row; a row of a location trash opens the Restore menu. */
-  private _sectionRow(
-    item: ITrashItem,
-    restoreSource: string | null
-  ): HTMLDivElement {
+  /** One section row; it opens the Restore menu of its source. */
+  private _sectionRow(item: ITrashItem, source: string): HTMLDivElement {
     const row = document.createElement('div');
     row.className = 'jp-TrashPanel-sectionRow';
-    if (restoreSource !== null) {
-      row.dataset.path = item.trash_path;
-      row.setAttribute('role', 'option');
-      row.title = this._itemTitle(item);
-      row.addEventListener('contextmenu', (e: MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this._openSectionMenu(
-          restoreSource,
-          item,
-          row,
-          e.clientX,
-          e.clientY,
-          false
-        );
-      });
-      row.addEventListener('keydown', (e: KeyboardEvent) => {
-        if (!isMenuKey(e)) {
-          return;
-        }
-        e.preventDefault();
-        e.stopPropagation();
-        const rect = row.getBoundingClientRect();
-        this._openSectionMenu(
-          restoreSource,
-          item,
-          row,
-          rect.left + 8,
-          rect.bottom,
-          true
-        );
-      });
-    }
+    row.dataset.path = item.trash_path;
+    row.setAttribute('role', 'option');
+    row.title = this._itemTitle(item);
+    row.addEventListener('contextmenu', (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._openSectionMenu(source, item, row, e.clientX, e.clientY, false);
+    });
+    row.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (!isMenuKey(e)) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = row.getBoundingClientRect();
+      this._openSectionMenu(
+        source,
+        item,
+        row,
+        rect.left + 8,
+        rect.bottom,
+        true
+      );
+    });
 
     const name = document.createElement('span');
     name.className = 'jp-TrashPanel-sectionName';
@@ -1037,8 +1293,8 @@ export class TrashWidget extends Widget {
    * Show another location: a folder inside the trash, or the top level for
    * an empty path.
    */
-  private _navigate(path: string[]): void {
-    void this.refresh(path);
+  private _navigate(path: string[], source: string = this._pathSource): void {
+    void this.refresh(path, source);
   }
 
   private _renderColumnHeader(): void {
@@ -1130,8 +1386,8 @@ export class TrashWidget extends Widget {
           break;
       }
       // A tie must resolve the same way in both directions, or the arrow
-      // claims an order the list does not have; trash_path breaks it.
-      return order !== 0 ? order : a.trash_path.localeCompare(b.trash_path);
+      // claims an order the list does not have; the row key breaks it.
+      return order !== 0 ? order : rowKey(a).localeCompare(rowKey(b));
     });
 
     return items;
@@ -1144,11 +1400,23 @@ export class TrashWidget extends Widget {
     this.toggleClass('jp-mod-empty', this._items.length === 0);
 
     if (this._items.length === 0) {
+      // The merged top level is empty only once every source has answered
+      const waiting =
+        !this._loaded ||
+        (!this._showVolumes &&
+          this._path.length === 0 &&
+          (!this._sourcesSettled ||
+            this._sources.some(
+              source =>
+                source.id !== 'xdg' &&
+                !source.error &&
+                !this._sectionListings.has(source.id)
+            )));
       this._emptyMessage.textContent =
         this._path.length > 0
           ? trans.__('Folder is empty')
           : trans.__('Trash is empty');
-      this._emptyMessage.style.display = '';
+      this._emptyMessage.style.display = waiting ? 'none' : '';
       // A hidden element cannot hold the focus; hand it to the header
       if (
         document.activeElement === this._list ||
@@ -1207,14 +1475,14 @@ export class TrashWidget extends Widget {
 
   private _handleItemClick(item: ITrashItem, index: number, e: MouseEvent) {
     // A click makes its row the active row, so the keyboard continues from it
-    this._activePath = item.trash_path;
+    this._activePath = rowKey(item);
     this._renderActiveRow();
     // Resolve the anchor by path: a sort change reorders the rows between clicks
     const anchorIndex =
       this._lastClickedAnchor === null
         ? -1
         : this._sortedItems.findIndex(
-            row => row.trash_path === this._lastClickedAnchor
+            row => rowKey(row) === this._lastClickedAnchor
           );
     if (e.shiftKey && anchorIndex >= 0) {
       // Shift+click: range select from the anchor to the current row
@@ -1236,12 +1504,12 @@ export class TrashWidget extends Widget {
       } else {
         this._selectItem(item);
       }
-      this._lastClickedAnchor = item.trash_path;
+      this._lastClickedAnchor = rowKey(item);
     } else {
       // Normal click: select only this item
       this._clearSelection();
       this._selectItem(item);
-      this._lastClickedAnchor = item.trash_path;
+      this._lastClickedAnchor = rowKey(item);
     }
   }
 
@@ -1258,9 +1526,12 @@ export class TrashWidget extends Widget {
   private _createItemElement(item: ITrashItem): HTMLDivElement {
     const itemEl = document.createElement('div');
     itemEl.className = 'jp-TrashPanel-item';
-    // An id derived from the path is stable across every render, so
+    // An id derived from the row key is stable across every render, so
     // aria-activedescendant keeps naming the same row after a reload.
     itemEl.id = this._rowId(item);
+    if (item.source !== undefined) {
+      itemEl.dataset.source = item.source;
+    }
     itemEl.setAttribute('role', 'option');
     itemEl.setAttribute('aria-selected', String(this._selectedItems.has(item)));
     if (this._selectedItems.has(item)) {
@@ -1316,9 +1587,7 @@ export class TrashWidget extends Widget {
 
     // Double-click opens a folder. A symlink is never followed.
     if (item.is_dir && !item.is_symlink) {
-      itemEl.addEventListener('dblclick', () =>
-        this._navigate(item.trash_path.split('/'))
-      );
+      itemEl.addEventListener('dblclick', () => this._openItem(item));
     }
 
     // Context menu
@@ -1330,7 +1599,7 @@ export class TrashWidget extends Widget {
       if (!this._selectedItems.has(item)) {
         this._clearSelection();
         this._selectItem(item);
-        this._lastClickedAnchor = item.trash_path;
+        this._lastClickedAnchor = rowKey(item);
       }
 
       this.node.classList.add('jp-mod-contextMenuOpen');
@@ -1343,7 +1612,7 @@ export class TrashWidget extends Widget {
 
   private _rowId(item: ITrashItem): string {
     // Code units, not code points: astral characters must keep distinct ids.
-    const units = item.trash_path
+    const units = rowKey(item)
       .split('')
       .map(c => c.charCodeAt(0).toString(36))
       .join('-');
@@ -1356,7 +1625,7 @@ export class TrashWidget extends Widget {
    */
   private _handleListKeyDown(e: KeyboardEvent): void {
     const index = this._sortedItems.findIndex(
-      item => item.trash_path === this._activePath
+      item => rowKey(item) === this._activePath
     );
     const moved = movedIndex(e.key, index, this._sortedItems.length);
     if (moved !== null) {
@@ -1380,7 +1649,7 @@ export class TrashWidget extends Widget {
     if (this._sortedItems.length === 0) {
       return;
     }
-    this._activePath = this._sortedItems[index].trash_path;
+    this._activePath = rowKey(this._sortedItems[index]);
     this._renderActiveRow();
     this._itemElements
       .get(this._sortedItems[index])
@@ -1394,7 +1663,7 @@ export class TrashWidget extends Widget {
   private _restoreActiveRow(): void {
     if (
       this._activePath !== null &&
-      !this._sortedItems.some(row => row.trash_path === this._activePath)
+      !this._sortedItems.some(row => rowKey(row) === this._activePath)
     ) {
       this._activePath = null;
       // The focused list fires no new focus event; apply the focus rule here
@@ -1410,7 +1679,7 @@ export class TrashWidget extends Widget {
       el.classList.remove('jp-mod-active');
     }
     const item = this._sortedItems.find(
-      row => row.trash_path === this._activePath
+      row => rowKey(row) === this._activePath
     );
     const el = item === undefined ? undefined : this._itemElements.get(item);
     if (el === undefined) {
@@ -1427,13 +1696,13 @@ export class TrashWidget extends Widget {
     } else {
       this._selectItem(item);
     }
-    this._lastClickedAnchor = item.trash_path;
+    this._lastClickedAnchor = rowKey(item);
   }
 
   /** Enter on an active row does what a double-click does. */
   private _openItem(item: ITrashItem): void {
     if (item.is_dir && !item.is_symlink) {
-      this._navigate(item.trash_path.split('/'));
+      this._navigate(item.trash_path.split('/'), item.source ?? 'xdg');
     }
   }
 
@@ -1442,7 +1711,7 @@ export class TrashWidget extends Widget {
     if (!this._selectedItems.has(item)) {
       this._clearSelection();
       this._selectItem(item);
-      this._lastClickedAnchor = item.trash_path;
+      this._lastClickedAnchor = rowKey(item);
     }
     const el = this._itemElements.get(item);
     if (el === undefined) {
@@ -1502,9 +1771,66 @@ export class TrashWidget extends Widget {
     }
   }
 
+  /**
+   * After an action changed the trash: take the rows `gone` names, by source
+   * id ('xdg' for the XDG trash), out of the drawn lists and the summary at
+   * once, then list the trash again in the background, the main listing
+   * unless `main` is false. Each source's answer redraws its own rows;
+   * answers that started before the action are dropped.
+   */
+  private _reloadChanged(
+    gone: (source: string, item: ITrashItem) => boolean,
+    main = true
+  ): void {
+    this._trashGen++;
+    const strip = (
+      data: ITrashListResponse,
+      source: string
+    ): ITrashListResponse => {
+      const items = data.items.filter(item => !gone(source, item));
+      if (items.length === data.items.length) {
+        return data;
+      }
+      // The server's total is the sum of its rows' sizes
+      const totalSize = items.reduce((sum, item) => sum + item.size, 0);
+      return {
+        items,
+        item_count: items.length,
+        total_size: totalSize,
+        total_size_formatted: formatSize(totalSize)
+      };
+    };
+    this._mainList = strip(this._mainList, this._pathSource);
+    for (const [id, listing] of this._sectionListings) {
+      if (!(listing instanceof Error)) {
+        this._sectionListings.set(id, strip(listing, id));
+      }
+    }
+    this._renderSections();
+    this._renderMain();
+    if (!main) {
+      void this._loadSources();
+      return;
+    }
+    this._loadTrashContents().catch(error =>
+      console.error('Failed to load trash:', error)
+    );
+  }
+
+  /** Reload after an empty; the sources in `emptied` hold nothing now. */
+  private _dropSources(emptied: Set<string>): void {
+    this._sources = this._sources.map(source =>
+      emptied.has(source.id)
+        ? { ...source, item_count: 0, total_size: formatSize(0) }
+        : source
+    );
+    this._reloadChanged(source => emptied.has(source));
+  }
+
   private async _restoreItems(items: ITrashItem[]): Promise<void> {
     this._setLoading(true);
     const errors: string[] = [];
+    const done = new Set<string>();
     try {
       for (const item of items) {
         try {
@@ -1513,9 +1839,14 @@ export class TrashWidget extends Widget {
             this._serverSettings,
             {
               method: 'POST',
-              body: JSON.stringify({ trash_path: item.trash_path })
+              // An XDG row has no source, so its body is the path alone
+              body: JSON.stringify({
+                trash_path: item.trash_path,
+                source: item.source
+              })
             }
           );
+          done.add(`${item.source ?? 'xdg'}\0${item.trash_path}`);
         } catch (error: any) {
           errors.push(`${item.name}: ${error?.message || 'unknown error'}`);
         }
@@ -1523,7 +1854,9 @@ export class TrashWidget extends Widget {
       if (errors.length > 0) {
         showErrorMessage('Restore Failed', errors.join('\n'));
       }
-      await this._loadTrashContents();
+      this._reloadChanged((source, row) =>
+        done.has(`${source}\0${row.trash_path}`)
+      );
     } finally {
       this._setLoading(false);
     }
@@ -1548,6 +1881,7 @@ export class TrashWidget extends Widget {
     if (result.button.accept) {
       this._setLoading(true);
       const errors: string[] = [];
+      const done = new Set<string>();
       try {
         for (const item of items) {
           try {
@@ -1556,9 +1890,13 @@ export class TrashWidget extends Widget {
               this._serverSettings,
               {
                 method: 'POST',
-                body: JSON.stringify({ trash_path: item.trash_path })
+                body: JSON.stringify({
+                  trash_path: item.trash_path,
+                  source: item.source
+                })
               }
             );
+            done.add(`${item.source ?? 'xdg'}\0${item.trash_path}`);
           } catch (error: any) {
             errors.push(`${item.name}: ${error?.message || 'unknown error'}`);
           }
@@ -1566,46 +1904,9 @@ export class TrashWidget extends Widget {
         if (errors.length > 0) {
           showErrorMessage('Delete Failed', errors.join('\n'));
         }
-        await this._loadTrashContents();
-      } finally {
-        this._setLoading(false);
-      }
-    }
-  }
-
-  private async _emptyTrash(): Promise<void> {
-    const result = await showDialog({
-      title: trans.__('Empty Trash'),
-      body: trans.__(
-        'Are you sure you want to permanently delete all items in the trash? This cannot be undone.'
-      ),
-      buttons: [
-        Dialog.cancelButton(),
-        Dialog.warnButton({ label: trans.__('Empty Trash') })
-      ]
-    });
-
-    if (result.button.accept) {
-      this._setLoading(true);
-      try {
-        const result = await requestAPI<{
-          success: boolean;
-          deleted_count: number;
-          errors?: string[];
-        }>('empty', this._serverSettings, {
-          method: 'POST',
-          body: JSON.stringify({ scope: 'xdg' })
-        });
-        await this._loadTrashContents();
-        if (!result.success) {
-          showErrorMessage(
-            'Empty Trash Failed',
-            (result.errors ?? []).join('\n')
-          );
-        }
-      } catch (error: any) {
-        const message = error?.message || 'Failed to empty trash';
-        showErrorMessage('Empty Trash Failed', message);
+        this._reloadChanged((source, row) =>
+          done.has(`${source}\0${row.trash_path}`)
+        );
       } finally {
         this._setLoading(false);
       }
@@ -1647,14 +1948,82 @@ export class TrashWidget extends Widget {
     }
 
     this._setLoading(true);
+    let response: ICleanResponse;
     try {
-      const response = await requestAPI<ICleanResponse>(
+      response = await requestAPI<ICleanResponse>(
         'empty',
         this._serverSettings,
         { method: 'POST', body: JSON.stringify({ scope }) }
       );
-      await this._loadTrashContents();
-      await this._reportClean(response, scope);
+    } catch (error: any) {
+      showErrorMessage(
+        trans.__('%1 Failed', title),
+        error?.message || trans.__('Failed to clean the trash')
+      );
+      return;
+    } finally {
+      this._setLoading(false);
+    }
+    const clean = new Set(
+      (response.sources ?? [])
+        .filter(entry => entry.errors.length === 0)
+        .map(entry => entry.id)
+    );
+    if (scope === 'all') {
+      this._dropSources(clean);
+    } else {
+      this._reloadChanged(
+        (source, item) => clean.has(source) && isUnder(item.original_path, root)
+      );
+    }
+    await this._reportClean(response, scope);
+  }
+
+  /**
+   * Empty one source after a confirmation naming it with its count and size,
+   * then reload the listing and the sources.
+   */
+  private async _emptySource(id: string): Promise<void> {
+    const source = this._sources.find(item => item.id === id);
+    if (source === undefined) {
+      return;
+    }
+    const title = trans.__('Empty Trash in %1', source.label);
+    const result = await showDialog({
+      title,
+      body: [
+        trans.__(
+          'Every item in this trash source will be permanently deleted. This cannot be undone.'
+        ),
+        '',
+        this._sourceSummary(source)
+      ].join('\n'),
+      buttons: [
+        Dialog.cancelButton(),
+        Dialog.warnButton({ label: trans.__('Empty') })
+      ]
+    });
+    if (!result.button.accept) {
+      return;
+    }
+
+    this._setLoading(true);
+    try {
+      const response = await requestAPI<ICleanResponse>(
+        'empty',
+        this._serverSettings,
+        {
+          method: 'POST',
+          body: JSON.stringify({ scope: 'source', source: id })
+        }
+      );
+      this._dropSources(new Set(response.success ? [id] : []));
+      if (!response.success) {
+        showErrorMessage(
+          trans.__('%1 Failed', title),
+          (response.errors ?? []).join('\n')
+        );
+      }
     } catch (error: any) {
       showErrorMessage(
         trans.__('%1 Failed', title),

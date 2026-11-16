@@ -5,6 +5,7 @@ opens the server to the world and provide access to JupyterLab
 JavaScript objects through the global window variable.
 """
 import os
+from pathlib import Path
 from tempfile import mkdtemp
 
 from jupyterlab.galata import configure_jupyter_server
@@ -15,6 +16,12 @@ from jupyterlab.galata import configure_jupyter_server
 TRASH_HOME = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".trash-home")
 os.environ["XDG_DATA_HOME"] = TRASH_HOME
 os.makedirs(TRASH_HOME, exist_ok=True)
+
+# The cache and home trashes are found under routes.HOMES_ROOT; a missing
+# folder under TRASH_HOME means the server never lists or empties /home/*.
+from jupyterlab_trash_mgmt_extension import routes  # noqa: E402
+
+routes.HOMES_ROOT = Path(TRASH_HOME) / "homes"
 
 configure_jupyter_server(c)
 

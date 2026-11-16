@@ -2,6 +2,26 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.28] - 2026-11-16
+
+### Added
+
+- Show Volumes: a checkable entry in the panel header's right-click menu and in the command palette under Trash; off by default and remembered in the browser; while on, each trash shows as its own section
+- With Show Volumes on, each section band has a trash button beside its fold toggle that empties only that trash after a dialog naming it, and the summary bar has a trash button that empties only the home trash
+- Every row of every trash offers Restore, `/home/cache` and the per-user home trashes included
+- Server: `POST delete` takes a `source` id, and `POST empty` takes scope `source` with a `source` id; an unknown id or a path outside that trash answers 400
+
+### Changed
+
+- While Show Volumes is off, the main list shows the items of every trash together; each row restores and deletes in its own trash
+- Delete, Restore and every empty hold the panel veil only while their own request runs; the rows they removed go at once, and a slow trash no longer holds back the others
+- A section band stays one 21px line; a long folder label ends in an ellipsis and its tooltip shows the full label
+
+### Fixed
+
+- The header trash button empties every trash, not only the home trash; its dialog lists every trash
+- After a keyboard empty the focus moves to the fold toggle or the refresh button instead of leaving the panel
+
 ## [1.1.27] - 2026-11-15
 
 ### Added

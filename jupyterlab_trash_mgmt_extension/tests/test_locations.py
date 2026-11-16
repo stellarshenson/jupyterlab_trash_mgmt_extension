@@ -317,6 +317,87 @@ class TestLocationRestore:
         assert (nas["location"] / "d" / "sub" / "file.txt").read_text() == "1234567890"
 
 
+
+@pytest.mark.parametrize(
+    "source, trash_dir",
+    [("cache", "cache"), ("home:alice", "alice/.local/share/Trash")],
+)
+class TestHomesRestore:
+    """ACC-SCOPE-92-RESTORE-ALL: a /home/cache and a /home/<name> row restore."""
+
+    @pytest.fixture
+    def homes_trash(self, tmp_path, source, trash_dir):
+        # conftest points routes.HOMES_ROOT at tmp_path / "homes"
+        trash = make_trash(routes.HOMES_ROOT / trash_dir)
+        target = tmp_path / "restored" / "b.txt"
+        add_trash_item(trash, "b.txt", str(target), source)
+        return {"trash": trash, "target": target}
+
+    async def test_restore_moves_the_item_to_its_original_path(
+        self, jp_fetch, homes_trash, source
+    ):
+        data = await fetch_json(
+            jp_fetch, "restore", {"trash_path": "b.txt", "source": source}
+        )
+        assert data == {"success": True, "restored_to": str(homes_trash["target"])}
+        assert homes_trash["target"].read_text() == source
+        assert not (homes_trash["trash"] / "files" / "b.txt").exists()
+        assert not (homes_trash["trash"] / "info" / "b.txt.trashinfo").exists()
+
+    async def test_existing_destination_is_409_and_keeps_the_item(
+        self, jp_fetch, homes_trash, source
+    ):
+        target = homes_trash["target"]
+        target.parent.mkdir(parents=True)
+        target.write_text("already here")
+        code, error = await failure_of(
+            fetch_json(jp_fetch, "restore", {"trash_path": "b.txt", "source": source})
+        )
+        assert (code, error) == (409, f"Destination already exists: {target}")
+        assert target.read_text() == "already here"
+        assert (homes_trash["trash"] / "files" / "b.txt").exists()
+        assert (homes_trash["trash"] / "info" / "b.txt.trashinfo").exists()
+
+class TestLocationDelete:
+    async def test_delete_with_a_source_deletes_only_there(self, jp_fetch, nas, trash_dir):
+        add_trash_item(trash_dir, "b.txt", "/home/user/b.txt", "xdg")
+        data = await fetch_json(jp_fetch, "delete", {"trash_path": "b.txt", "source": nas["id"]})
+        assert data == {"success": True}
+        assert not (nas["trash"] / "files" / "b.txt").exists()
+        assert not (nas["trash"] / "info" / "b.txt.trashinfo").exists()
+        assert (trash_dir / "files" / "b.txt").read_text() == "xdg"
+        assert (trash_dir / "info" / "b.txt.trashinfo").exists()
+
+    async def test_unknown_source_is_400(self, jp_fetch, nas):
+        code, error = await failure_of(
+            fetch_json(jp_fetch, "delete", {"trash_path": "b.txt", "source": "nope"})
+        )
+        assert (code, error) == (400, "Unknown trash source")
+        assert (nas["trash"] / "files" / "b.txt").exists()
+
+    @pytest.mark.parametrize("trash_path", ["../x", "/etc/passwd", "d/link/keep.txt"])
+    async def test_path_leaving_the_source_trash_is_400(
+        self, jp_fetch, nas, tmp_path, trash_path
+    ):
+        # ../x would name this file; d/link is a symbolic link out of the trash
+        victim = nas["trash"] / "x"
+        victim.write_text("victim")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("keep")
+        (nas["trash"] / "files" / "d").mkdir()
+        os.symlink(outside, nas["trash"] / "files" / "d" / "link")
+
+        code, error = await failure_of(
+            fetch_json(jp_fetch, "delete", {"trash_path": trash_path, "source": nas["id"]})
+        )
+
+        assert (code, error) == (400, "Invalid trash path")
+        assert victim.read_text() == "victim"
+        assert (outside / "keep.txt").read_text() == "keep"
+        assert (nas["trash"] / "files" / "b.txt").exists()
+
+
 @pytest.fixture
 def two_locations(jp_serverapp, tmp_path):
     """The server root holding .Trash-<uid> and a second location with a sticky .Trash/<uid>.
@@ -359,3 +440,38 @@ class TestLocationEmpty:
         for trash in (two_locations["root_trash"], two_locations["nas_trash"]):
             assert [p.name for p in (trash / "files").iterdir()] == ["out.txt"]
             assert [p.name for p in (trash / "info").iterdir()] == ["out.txt.trashinfo"]
+
+    async def test_scope_source_empties_only_that_source(
+        self, jp_fetch, two_locations, trash_dir
+    ):
+        add_trash_item(trash_dir, "x.txt", "/home/user/x.txt")
+        body = await fetch_json(
+            jp_fetch, "empty", {"scope": "source", "source": two_locations["nas"]}
+        )
+        assert body == {"success": True, "deleted_count": 2}
+        assert list((two_locations["nas_trash"] / "files").iterdir()) == []
+        assert list((two_locations["nas_trash"] / "info").iterdir()) == []
+        assert [p.name for p in (trash_dir / "files").iterdir()] == ["x.txt"]
+        assert sorted(p.name for p in (two_locations["root_trash"] / "files").iterdir()) == [
+            "in.txt", "out.txt"
+        ]
+
+    async def test_scope_source_keeps_the_cached_sizes_of_other_sources(
+        self, jp_fetch, two_locations, trash_dir
+    ):
+        folder = trash_dir / "files" / "dir"
+        folder.mkdir()
+        (folder / "a.txt").write_text("abc")
+        routes.get_dir_size_cached(folder)
+        key = os.path.abspath(folder)
+        assert key in routes._dir_size_cache
+
+        await fetch_json(jp_fetch, "empty", {"scope": "source", "source": two_locations["nas"]})
+        assert key in routes._dir_size_cache
+
+    @pytest.mark.parametrize("body", [{"scope": "source", "source": "nope"}, {"scope": "source"}])
+    async def test_scope_source_with_an_unknown_id_is_400(self, jp_fetch, two_locations, body):
+        code, error = await failure_of(fetch_json(jp_fetch, "empty", body))
+        assert (code, error) == (400, "Unknown trash source")
+        for trash in (two_locations["root_trash"], two_locations["nas_trash"]):
+            assert len(list((trash / "files").iterdir())) == 2

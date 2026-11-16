@@ -21,6 +21,7 @@ namespace CommandIDs {
   export const empty = 'trash:empty';
   export const cleanAll = 'trash:clean-all';
   export const cleanWorkspace = 'trash:clean-workspace';
+  export const showVolumes = 'trash:show-volumes';
 }
 
 /**
@@ -77,7 +78,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
       describedBy: { args: { type: 'object', properties: {} } },
       execute: () => {
         // The widget handles the confirmation dialog internally
-        (widget as any)._emptyTrash();
+        (widget as any)._cleanSources('all');
       }
     });
 
@@ -102,6 +103,17 @@ const plugin: JupyterFrontEndPlugin<void> = {
       execute: () => {
         // The widget handles the confirmation dialog internally
         (widget as any)._cleanSources('workspace');
+      }
+    });
+
+    // Register the Show Volumes toggle; the panel header menu holds it too
+    commands.addCommand(CommandIDs.showVolumes, {
+      label: trans.__('Show Volumes'),
+      caption: trans.__('Show each trash source as its own section'),
+      describedBy: { args: { type: 'object', properties: {} } },
+      isToggled: () => widget.showVolumes,
+      execute: () => {
+        widget.toggleShowVolumes();
       }
     });
 

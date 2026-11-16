@@ -231,6 +231,14 @@ async function openInsideA(): Promise<TrashWidget> {
 const COLLAPSED_KEY =
   '@stellarshenson/jupyterlab-trash-mgmt-extension:panel:collapsed';
 
+const SHOW_VOLUMES_KEY =
+  '@stellarshenson/jupyterlab-trash-mgmt-extension:panel:show-volumes';
+
+/** Turn Show Volumes on before the widget is built, as a saved choice does. */
+function showVolumesOn(): void {
+  window.localStorage.setItem(SHOW_VOLUMES_KEY, 'true');
+}
+
 interface ISource {
   id: string;
   label: string;
@@ -1585,31 +1593,48 @@ describe('failed reload after an action', () => {
     [action]: () => Promise.reject(new Error('denied'))
   });
 
+  /** The background reload logs its failure; the action does not wait for it. */
+  function logReload() {
+    return jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  }
+
   it('still reports the rows that could not be restored', async () => {
     const widget = await open({ list: listOf([file('one.txt')]) });
     serve(failing('restore'));
+    const logged = logReload();
 
-    await expect(
-      (widget as any)._restoreItems((widget as any)._items)
-    ).rejects.toThrow('HTTP 500');
+    await (widget as any)._restoreItems((widget as any)._items);
+    await settle();
     expect(showErrorMessage).toHaveBeenCalledWith(
       'Restore Failed',
       'one.txt: denied'
     );
+    expect(rowNames(widget)).toEqual(['one.txt']);
+    expect(logged).toHaveBeenCalledWith(
+      'Failed to load trash:',
+      expect.objectContaining({ message: 'HTTP 500' })
+    );
+    logged.mockRestore();
   });
 
   it('still reports the rows that could not be deleted', async () => {
     const widget = await open({ list: listOf([file('one.txt')]) });
     (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
     serve(failing('delete'));
+    const logged = logReload();
 
-    await expect(
-      (widget as any)._deleteItems((widget as any)._items)
-    ).rejects.toThrow('HTTP 500');
+    await (widget as any)._deleteItems((widget as any)._items);
+    await settle();
     expect(showErrorMessage).toHaveBeenCalledWith(
       'Delete Failed',
       'one.txt: denied'
     );
+    expect(rowNames(widget)).toEqual(['one.txt']);
+    expect(logged).toHaveBeenCalledWith(
+      'Failed to load trash:',
+      expect.objectContaining({ message: 'HTTP 500' })
+    );
+    logged.mockRestore();
   });
 });
 
@@ -1622,15 +1647,22 @@ describe('Empty Trash', () => {
       empty: {
         success: false,
         deleted_count: 0,
-        errors: ['one.txt: denied']
+        sources: [
+          {
+            id: 'xdg',
+            label: 'Trash',
+            deleted_count: 0,
+            errors: ['one.txt: denied']
+          }
+        ]
       }
     });
 
     emptyButton(widget).click();
     await settle();
     expect(showErrorMessage).toHaveBeenCalledWith(
-      'Empty Trash Failed',
-      'one.txt: denied'
+      'Clean All Sources Failed',
+      'Trash: 0 items deleted\nTrash: one.txt: denied'
     );
   });
 
@@ -1652,6 +1684,8 @@ describe('Empty Trash', () => {
 });
 
 describe('trash sources', () => {
+  beforeEach(showVolumesOn);
+
   it('renders the returned sources in order below the main list, absent ones omitted', async () => {
     const widget = await open(sourcedRoutes());
 
@@ -1702,6 +1736,27 @@ describe('trash sources', () => {
     ).toBe('/home/cache');
     expect(count.textContent).toBe(' (12 items, 40 MB)');
     expect(shrink).toBe('0');
+  });
+
+  it('keeps the band one line, the label text titled with its full label', async () => {
+    const style = document.createElement('style');
+    style.textContent = jest
+      .requireActual('fs')
+      .readFileSync('style/base.css', 'utf8');
+    document.head.appendChild(style);
+    const widget = await openAttached(sourcedRoutes());
+    const label = sectionLabel(widget, 'cache');
+    const text = label.querySelector<HTMLElement>(
+      ':scope > .jp-TrashPanel-sectionText'
+    )!;
+    const wrap = getComputedStyle(label).flexWrap;
+    const textStyle = getComputedStyle(text);
+    const ellipsis = [textStyle.textOverflow, textStyle.whiteSpace];
+    style.remove();
+
+    expect(text.title).toBe('/home/cache');
+    expect(wrap).not.toBe('wrap');
+    expect(ellipsis).toEqual(['ellipsis', 'nowrap']);
   });
 
   it('lifts the 40% cap of the sections only while the main list is empty', async () => {
@@ -1930,6 +1985,8 @@ describe('trash sources', () => {
 });
 
 describe('location trash sections', () => {
+  beforeEach(showVolumesOn);
+
   const LOCATION = 'location:/mnt/data/.Trash-1000';
   const LISTING = 'list?source=location%3A%2Fmnt%2Fdata%2F.Trash-1000';
 
@@ -2136,31 +2193,43 @@ describe('location trash sections', () => {
     expect(veil(widget).hidden).toBe(true);
   });
 
-  it('opens no menu and adds no tab stop on a cache row', async () => {
-    const widget = await open(locationRoutes());
-    const opened = sectionMenuOpen(widget);
-    const mainOpened = jest
-      .spyOn((widget as any)._contextMenu, 'open')
-      .mockImplementation(() => undefined);
-    const row = sectionRows(widget, 'cache')[0];
+  // ACC-SCOPE-92-RESTORE-ALL: if there is a trash, there is Restore
+  it.each([
+    ['cache', 'cache.bin'],
+    ['home:alice', 'alice.txt']
+  ])(
+    'opens the Restore menu on a %s row by right-click and Shift+F10 and posts its source id',
+    async (id, name) => {
+      const widget = await openAttached(locationRoutes());
+      const opened = sectionMenuOpen(widget);
+      const row = sectionRows(widget, id)[0];
+      expect(sectionList(widget, id).getAttribute('role')).toBe('listbox');
+      expect(row.getAttribute('role')).toBe('option');
+      expect(row.tabIndex).toBe(0);
+      expect(row.title).toContain(`Original: /home/user/${name}`);
 
-    rightClick(row);
-    press(row, 'F10', { shiftKey: true });
+      rightClick(row);
+      expect(opened).toHaveBeenCalledTimes(1);
+      row.focus();
+      press(row, 'F10', { shiftKey: true });
+      expect(opened).toHaveBeenCalledTimes(2);
 
-    expect(opened).not.toHaveBeenCalled();
-    expect(mainOpened).not.toHaveBeenCalled();
-    expect(row.hasAttribute('tabindex')).toBe(false);
-    expect(sectionList(widget, 'cache').hasAttribute('role')).toBe(false);
-  });
+      const routes = locationRoutes();
+      routes[`list?source=${encodeURIComponent(id)}`] = listOf([]);
+      routes.restore = { success: true, restored_to: `/home/user/${name}` };
+      serve(routes);
+      await (widget as any)._commands.execute('trash:restore-from-source');
+      await settle();
 
-  it('titles a location row with its original path and leaves a cache row untitled', async () => {
-    const widget = await open(locationRoutes());
-
-    expect(locationRows(widget)[0].title).toContain(
-      'Original: /home/user/a.txt'
-    );
-    expect(sectionRows(widget, 'cache')[0].title).toBe('');
-  });
+      const restore = request.mock.calls.find(call => call[0] === 'restore')!;
+      expect(JSON.parse(restore[2].body)).toEqual({
+        trash_path: name,
+        source: id
+      });
+      expect(sectionRows(widget, id)).toHaveLength(0);
+      expect(showErrorMessage).not.toHaveBeenCalled();
+    }
+  );
 
   it('names the location source with its count and size in both clean dialogs', async () => {
     const widget = await open(locationRoutes());
@@ -2179,5 +2248,778 @@ describe('location trash sections', () => {
     for (const dialog of dialogs) {
       expect(dialog.body).toContain('/mnt/data (2 items, 3 KB)');
     }
+  });
+});
+
+describe('Show Volumes and the merged list', () => {
+  const LOCATION = 'location:/mnt/data/.Trash-1000';
+  const LISTING = 'list?source=location%3A%2Fmnt%2Fdata%2F.Trash-1000';
+
+  const headerMenu = (widget: TrashWidget) => (widget as any)._headerMenu;
+
+  function rightClick(element: HTMLElement): void {
+    element.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    );
+  }
+
+  /** A row deleted at this hour, so the default newest-first sort orders it. */
+  const at = (row: IRow, hour: number): IRow => ({
+    ...row,
+    deletion_date: `2024-01-14T${String(hour).padStart(2, '0')}:00:00`
+  });
+
+  /** The xdg trash and a location trash, each with its own byte total. */
+  function mergedRoutes(): Record<string, Route> {
+    return {
+      sources: [sourceOf('xdg', 2, '1000 B'), sourceOf(LOCATION, 1, '2.0 KB')],
+      list: {
+        ...listOf([at(file('one.txt'), 9), at(file('three.txt'), 11)]),
+        total_size: 1000
+      },
+      [LISTING]: { ...listOf([at(folder('d'), 10)]), total_size: 2048 }
+    };
+  }
+
+  const rowOf = (widget: TrashWidget, source: string, name: string) =>
+    rows(widget).find(
+      row =>
+        row.dataset.source === source &&
+        row.querySelector('.jp-TrashPanel-item-name')!.textContent === name
+    )!;
+
+  it.each([
+    ['unset', null],
+    ['unreadable', '{not json']
+  ])(
+    'is off while the saved choice is %s: no section, and the header menu holds Show Volumes unchecked',
+    async (_, saved) => {
+      if (saved !== null) {
+        window.localStorage.setItem(SHOW_VOLUMES_KEY, saved);
+      }
+      const widget = await open(sourcedRoutes());
+      expect(sections(widget)).toHaveLength(0);
+
+      const opened = jest
+        .spyOn(headerMenu(widget), 'open')
+        .mockImplementation(() => undefined);
+      rightClick(find(widget, '.jp-TrashPanel-header'));
+      expect(opened).toHaveBeenCalledTimes(1);
+      const items = headerMenu(widget).items;
+      expect(items.map((item: any) => item.label)).toEqual(['Show Volumes']);
+      expect(items[0].isToggled).toBe(false);
+    }
+  );
+
+  it('draws the sections when run, saves the choice, and a new widget starts with it on', async () => {
+    const widget = await open(sourcedRoutes());
+
+    await (widget as any)._commands.execute('trash:show-volumes');
+    await settle();
+    expect(sections(widget).map(element => element.dataset.source)).toEqual([
+      'cache',
+      'home:alice'
+    ]);
+    // While on, the main list is the XDG trash only
+    expect(rowNames(widget)).toEqual(['one.txt']);
+    expect(window.localStorage.getItem(SHOW_VOLUMES_KEY)).toBe('true');
+
+    const again = await open(sourcedRoutes());
+    expect(sections(again)).toHaveLength(2);
+    expect(headerMenu(again).items[0].isToggled).toBe(true);
+
+    // Running it again removes the sections
+    await (again as any)._commands.execute('trash:show-volumes');
+    await settle();
+    expect(sections(again)).toHaveLength(0);
+    expect(window.localStorage.getItem(SHOW_VOLUMES_KEY)).toBe('false');
+  });
+
+  it('merges a location answering later into the sorted main list and sums the summary', async () => {
+    const held = deferred<unknown>();
+    const routes = mergedRoutes();
+    const listing = routes[LISTING];
+    routes[LISTING] = () => held.promise;
+    const widget = await open(routes);
+
+    // The xdg rows show while the location is still unanswered
+    expect(rowNames(widget)).toEqual(['three.txt', 'one.txt']);
+    expect(summary(widget).textContent).toBe('2 items · 0 B');
+
+    // A refresh sends no second request for the pending location
+    void widget.refresh();
+    await settle();
+    expect(requested().filter(endPoint => endPoint === LISTING)).toHaveLength(
+      1
+    );
+
+    held.resolve(listing);
+    await settle();
+    expect(rowNames(widget)).toEqual(['three.txt', 'd', 'one.txt']);
+    expect(rowOf(widget, LOCATION, 'd')).toBeDefined();
+    expect(summary(widget).textContent).toBe('3 items · 3.0 KB');
+    expect(sections(widget)).toHaveLength(0);
+
+    // Show Volumes on: the XDG rows only, and the location as a section
+    await (widget as any)._commands.execute('trash:show-volumes');
+    await settle();
+    expect(rowNames(widget)).toEqual(['three.txt', 'one.txt']);
+    expect(sections(widget).map(element => element.dataset.source)).toEqual([
+      LOCATION
+    ]);
+  });
+
+  it('gives one name in two sources two rows, each its own identity', async () => {
+    const routes = mergedRoutes();
+    routes[LISTING] = listOf([file('one.txt')]);
+    const widget = await openAttached(routes);
+
+    expect(rowNames(widget).filter(name => name === 'one.txt')).toHaveLength(2);
+    const ids = rows(widget).map(row => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    const located = rowOf(widget, LOCATION, 'one.txt');
+    click(located);
+    expect(selectedNames(widget)).toEqual(['one.txt']);
+    expect(located.classList).toContain('jp-mod-selected');
+    expect(listBox(widget).getAttribute('aria-activedescendant')).toBe(
+      located.id
+    );
+  });
+
+  it('sends the location source id on restore, delete and folder entry of a location row', async () => {
+    const routes = mergedRoutes();
+    routes[LISTING] = {
+      ...listOf([at(file('a.txt'), 12), at(folder('d'), 10)]),
+      total_size: 2048
+    };
+    routes.restore = { success: true, restored_to: '/mnt/data/a.txt' };
+    routes.delete = { success: true };
+    routes[`${LISTING}&path=d`] = listOf([file('inner.txt', 'd')]);
+    const widget = await open(routes);
+    jest
+      .spyOn((widget as any)._contextMenu, 'open')
+      .mockImplementation(() => undefined);
+    const bodyOf = (endPoint: string) =>
+      JSON.parse(
+        request.mock.calls.find(call => call[0] === endPoint)![2].body
+      );
+
+    rightClick(rowOf(widget, LOCATION, 'a.txt'));
+    await (widget as any)._commands.execute('trash:restore');
+    await settle();
+    expect(bodyOf('restore')).toEqual({
+      trash_path: 'a.txt',
+      source: LOCATION
+    });
+
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    rightClick(rowOf(widget, LOCATION, 'a.txt'));
+    await (widget as any)._commands.execute('trash:delete');
+    await settle();
+    expect(bodyOf('delete')).toEqual({ trash_path: 'a.txt', source: LOCATION });
+
+    doubleClick(rowOf(widget, LOCATION, 'd'));
+    await settle();
+    expect(requested()).toContain(`${LISTING}&path=d`);
+    expect(rowNames(widget)).toEqual(['inner.txt']);
+    expect(rows(widget)[0].dataset.source).toBe(LOCATION);
+
+    // The breadcrumb returns to the merged top level
+    click(crumbs(widget)[0]);
+    await settle();
+    expect(rowNames(widget)).toEqual(['a.txt', 'three.txt', 'd', 'one.txt']);
+    expect(showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it('draws a location answering before the XDG trash on the first load, then merges the XDG rows', async () => {
+    const held = deferred<unknown>();
+    const routes = mergedRoutes();
+    const listing = routes.list;
+    routes.list = () => held.promise;
+    serve(routes);
+    const widget = new TrashWidget(settings);
+    void widget.refresh();
+    await settle();
+    expect(rowNames(widget)).toEqual(['d']);
+    expect(veil(widget).hidden).toBe(true);
+
+    held.resolve(listing);
+    await settle();
+    expect(rowNames(widget)).toEqual(['three.txt', 'd', 'one.txt']);
+    expect(summary(widget).textContent).toBe('3 items · 3.0 KB');
+  });
+
+  it("shows 'Trash is empty' only once every source has answered with 0 items", async () => {
+    const xdg = deferred<unknown>();
+    const located = deferred<unknown>();
+    serve({
+      sources: [sourceOf('xdg'), sourceOf(LOCATION)],
+      list: () => xdg.promise,
+      [LISTING]: () => located.promise
+    });
+    const widget = new TrashWidget(settings);
+    const emptyLine = () => find(widget, '.jp-TrashPanel-empty');
+    void widget.refresh();
+    await settle();
+    expect(emptyLine().style.display).toBe('none');
+
+    xdg.resolve(listOf([]));
+    await settle();
+    expect(emptyLine().style.display).toBe('none');
+
+    located.resolve(listOf([]));
+    await settle();
+    expect(emptyLine().style.display).toBe('');
+    expect(emptyLine().textContent).toBe('Trash is empty');
+  });
+
+  /** Hold the next two requests of an end point until the test answers them. */
+  function holdRoute(routes: Record<string, Route>, endPoint: string) {
+    const early = deferred<unknown>();
+    const fresh = deferred<unknown>();
+    let calls = 0;
+    routes[endPoint] = () => (calls++ === 0 ? early.promise : fresh.promise);
+    return { early, fresh };
+  }
+
+  /**
+   * Start a location listing with a refresh, held until the test answers it,
+   * and hold the next one too.
+   */
+  async function holdListings(
+    widget: TrashWidget,
+    routes: Record<string, Route>
+  ) {
+    const held = holdRoute(routes, LISTING);
+    void widget.refresh();
+    await settle();
+    return held;
+  }
+
+  /** Follow an action's promise. */
+  function track(action: Promise<void>): { done: boolean } {
+    const state = { done: false };
+    void action.then(() => (state.done = true));
+    return state;
+  }
+
+  /** A row of this size in bytes. */
+  const sized = (row: IRow, size: number): IRow => ({ ...row, size });
+
+  /** A per-source entry of a clean response, with no error. */
+  const cleaned = (id: string) => ({
+    id,
+    label: sourceOf(id).label,
+    deleted_count: 1,
+    errors: []
+  });
+
+  it('removes a deleted location row and lowers the veil before the location lists again, and drops a listing that started before it', async () => {
+    const routes = mergedRoutes();
+    const before = {
+      ...listOf([
+        at(sized(file('a.txt'), 1024), 12),
+        at(sized(folder('d'), 2048), 10)
+      ]),
+      total_size: 3072
+    };
+    routes[LISTING] = before;
+    routes.delete = { success: true };
+    const widget = await open(routes);
+    expect(summary(widget).textContent).toBe('4 items · 4.0 KB');
+    const { early, fresh } = await holdListings(widget, routes);
+
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const item = (widget as any)._items.find(
+      (row: any) => row.source === LOCATION && row.name === 'a.txt'
+    );
+    const action = track((widget as any)._deleteItems([item]));
+    await settle();
+    // The delete answered: the veil is down and its row is gone at once
+    expect(action.done).toBe(true);
+    expect(veil(widget).hidden).toBe(true);
+    expect(rowNames(widget)).toEqual(['three.txt', 'd', 'one.txt']);
+    expect(summary(widget).textContent).toBe('3 items · 3.0 KB');
+
+    // The listing asked for before the delete answers late with the old rows
+    early.resolve(before);
+    await settle();
+    expect(rowNames(widget)).toEqual(['three.txt', 'd', 'one.txt']);
+    expect(summary(widget).textContent).toBe('3 items · 3.0 KB');
+
+    // The fresh listing redraws the location's rows when it answers
+    fresh.resolve({
+      ...listOf([at(sized(folder('d'), 2048), 10), at(file('e.txt'), 8)]),
+      total_size: 2048
+    });
+    await settle();
+    expect(rowNames(widget)).toEqual(['three.txt', 'd', 'one.txt', 'e.txt']);
+  });
+
+  it('removes a deleted XDG row while the location listing is held, keeps the row whose delete failed, and ignores the pre-action listings', async () => {
+    const routes = mergedRoutes();
+    const xdgBefore = {
+      ...listOf([
+        at(sized(file('one.txt'), 100), 9),
+        at(sized(file('three.txt'), 200), 11)
+      ]),
+      total_size: 300
+    };
+    routes.list = xdgBefore;
+    let deletes = 0;
+    routes.delete = () =>
+      deletes++ === 0
+        ? Promise.resolve({ success: true })
+        : Promise.reject(new Error('denied'));
+    const widget = await open(routes);
+    expect(summary(widget).textContent).toBe('3 items · 2.3 KB');
+    const locationBefore = routes[LISTING];
+    const main = holdRoute(routes, 'list');
+    const located = holdRoute(routes, LISTING);
+    void widget.refresh();
+    await settle();
+
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const items = ['one.txt', 'three.txt'].map(name =>
+      (widget as any)._items.find((row: any) => row.name === name)
+    );
+    const action = track((widget as any)._deleteItems(items));
+    await settle();
+    expect(action.done).toBe(true);
+    expect(veil(widget).hidden).toBe(true);
+    // one.txt's delete succeeded, three.txt's failed and its row stays
+    expect(rowNames(widget)).toEqual(['three.txt', 'd']);
+    expect(summary(widget).textContent).toBe('2 items · 2.2 KB');
+    expect(showErrorMessage).toHaveBeenCalledWith(
+      'Delete Failed',
+      'three.txt: denied'
+    );
+
+    // The listings asked for before the delete answer late with the old rows
+    main.early.resolve(xdgBefore);
+    located.early.resolve(locationBefore);
+    await settle();
+    expect(rowNames(widget)).toEqual(['three.txt', 'd']);
+    expect(summary(widget).textContent).toBe('2 items · 2.2 KB');
+
+    main.fresh.resolve({
+      ...listOf([at(sized(file('three.txt'), 200), 11)]),
+      total_size: 200
+    });
+    located.fresh.resolve(locationBefore);
+    await settle();
+    expect(rowNames(widget)).toEqual(['three.txt', 'd']);
+  });
+
+  it('removes every source row once Clean All Sources answers with no errors, before the sources list again', async () => {
+    const routes = mergedRoutes();
+    routes.empty = {
+      success: true,
+      deleted_count: 3,
+      sources: [cleaned('xdg'), cleaned(LOCATION)]
+    };
+    const widget = await open(routes);
+    expect(emptyButton(widget).hidden).toBe(false);
+    const before = routes[LISTING];
+    const { early, fresh } = await holdListings(widget, routes);
+    routes.list = listOf([]);
+    routes.sources = [sourceOf('xdg', 0, '0 B'), sourceOf(LOCATION, 0, '0 B')];
+
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const action = track((widget as any)._cleanSources('all'));
+    await settle();
+    expect(action.done).toBe(true);
+    expect(veil(widget).hidden).toBe(true);
+    expect(rowNames(widget)).toEqual([]);
+    expect(summary(widget).textContent).toBe('0 items · 0 B');
+    expect(emptyButton(widget).hidden).toBe(true);
+
+    early.resolve(before);
+    await settle();
+    expect(rowNames(widget)).toEqual([]);
+    expect(summary(widget).textContent).toBe('0 items · 0 B');
+
+    fresh.resolve(listOf([]));
+    await settle();
+    expect(rowNames(widget)).toEqual([]);
+  });
+
+  it('removes only the rows under the notebook root of each source Clean Workspace reports without errors', async () => {
+    PageConfig.setOption('serverRoot', '/home/user/');
+    const routes = mergedRoutes();
+    const outside = listOf([at(folder('d'), 10)]);
+    outside.items[0].original_path = '/srv/d';
+    routes[LISTING] = outside;
+    routes.empty = {
+      success: true,
+      deleted_count: 2,
+      sources: [cleaned('xdg'), cleaned(LOCATION)],
+      left_count: 1
+    };
+    const widget = await open(routes);
+    expect(rowNames(widget)).toEqual(['three.txt', 'd', 'one.txt']);
+    // Both sources list again after the clean, held unanswered
+    holdRoute(routes, 'list');
+    holdRoute(routes, LISTING);
+
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    await (widget as any)._cleanSources('workspace');
+    await settle();
+    expect(rowNames(widget)).toEqual(['d']);
+  });
+
+  it('removes the rows of a section its band empty emptied before the section lists again, with Show Volumes on', async () => {
+    showVolumesOn();
+    const routes = mergedRoutes();
+    routes.empty = { success: true, deleted_count: 1 };
+    const widget = await open(routes);
+    expect(sectionRows(widget, LOCATION)).toHaveLength(1);
+    const before = routes[LISTING];
+    const { early, fresh } = await holdListings(widget, routes);
+    routes.sources = [
+      sourceOf('xdg', 2, '1000 B'),
+      sourceOf(LOCATION, 0, '0 B')
+    ];
+
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const action = track((widget as any)._emptySource(LOCATION));
+    await settle();
+    expect(action.done).toBe(true);
+    expect(veil(widget).hidden).toBe(true);
+    expect(sectionRows(widget, LOCATION)).toHaveLength(0);
+
+    early.resolve(before);
+    await settle();
+    expect(sectionRows(widget, LOCATION)).toHaveLength(0);
+
+    fresh.resolve(listOf([]));
+    await settle();
+    expect(sectionRows(widget, LOCATION)).toHaveLength(0);
+  });
+
+  // ACC-SCOPE-92-RESTORE-ALL: if there is a trash, there is Restore
+  it.each([
+    ['cache', 'cache.bin'],
+    ['home:alice', 'alice.txt']
+  ])(
+    'offers Restore first on a %s row of the merged list and posts its source id',
+    async (id, name) => {
+      const widget = await open(sourcedRoutes());
+      const commands = (widget as any)._commands;
+      jest
+        .spyOn((widget as any)._contextMenu, 'open')
+        .mockImplementation(() => undefined);
+
+      rightClick(rowOf(widget, id, name));
+      expect(commands.isVisible('trash:restore')).toBe(true);
+      expect(
+        (widget as any)._contextMenu.items.map((item: any) => item.command)
+      ).toEqual(['trash:restore', 'trash:delete']);
+
+      const routes = sourcedRoutes();
+      routes[`list?source=${encodeURIComponent(id)}`] = listOf([]);
+      routes.restore = { success: true, restored_to: `/home/user/${name}` };
+      serve(routes);
+      await commands.execute('trash:restore');
+      await settle();
+
+      const restore = request.mock.calls.find(call => call[0] === 'restore')!;
+      expect(JSON.parse(restore[2].body)).toEqual({
+        trash_path: name,
+        source: id
+      });
+      expect(rows(widget).some(row => row.dataset.source === id)).toBe(false);
+      expect(showErrorMessage).not.toHaveBeenCalled();
+    }
+  );
+});
+
+describe('trash buttons', () => {
+  const LOCATION = 'location:/mnt/data/.Trash-1000';
+  const LISTING = 'list?source=location%3A%2Fmnt%2Fdata%2F.Trash-1000';
+
+  /** An empty XDG trash and a location trash holding two entries. */
+  function locationOnlyRoutes(count = 2): Record<string, Route> {
+    return {
+      sources: [
+        sourceOf('xdg', 0, '0 B'),
+        sourceOf(LOCATION, count, count ? '3 KB' : '0 B')
+      ],
+      list: listOf([]),
+      [LISTING]: listOf(
+        [file('a.txt'), file('b.txt')].slice(0, count),
+        count ? '3 KB' : '0 B'
+      )
+    };
+  }
+
+  /** The sourced routes plus a location trash holding two entries. */
+  function bandRoutes(): Record<string, Route> {
+    const routes = sourcedRoutes();
+    routes.sources = [
+      ...(routes.sources as ISource[]),
+      sourceOf(LOCATION, 2, '3 KB')
+    ];
+    routes[LISTING] = listOf([file('a.txt'), file('b.txt')], '3 KB');
+    return routes;
+  }
+
+  const bandEmpty = (widget: TrashWidget, id: string) =>
+    sectionOf(widget, id).querySelector<HTMLButtonElement>(
+      '.jp-TrashPanel-sectionEmpty'
+    )!;
+
+  const emptyCalls = () =>
+    request.mock.calls.filter(call => call[0] === 'empty');
+
+  it.each([
+    ['off', false],
+    ['on', true]
+  ])(
+    'shows the header button for a location holding items over an empty XDG trash with Show Volumes %s; accept posts scope all after listing every source',
+    async (_, on) => {
+      if (on) {
+        showVolumesOn();
+      }
+      const widget = await open(locationOnlyRoutes());
+      expect(emptyButton(widget).hidden).toBe(false);
+
+      (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+      serve({
+        ...locationOnlyRoutes(),
+        empty: { success: true, deleted_count: 2, sources: [] }
+      });
+      emptyButton(widget).click();
+      await settle();
+
+      const dialog = (showDialog as jest.Mock).mock.calls[0][0];
+      expect(dialog.title).toBe('Clean All Sources');
+      expect(dialog.body).toContain('Trash (0 items, 0 B)');
+      expect(dialog.body).toContain('/mnt/data (2 items, 3 KB)');
+      expect(emptyCalls()).toHaveLength(1);
+      expect(JSON.parse(emptyCalls()[0][2].body)).toEqual({ scope: 'all' });
+    }
+  );
+
+  it('hides the header button once every source holds 0 items', async () => {
+    showVolumesOn();
+    const widget = await open(locationOnlyRoutes());
+    expect(emptyButton(widget).hidden).toBe(false);
+
+    serve(locationOnlyRoutes(0));
+    void widget.refresh();
+    await settle();
+    expect(emptyButton(widget).hidden).toBe(true);
+  });
+
+  it('empties one source from its band after a dialog naming it, leaving the fold state and the other sources', async () => {
+    showVolumesOn();
+    const widget = await openAttached(bandRoutes());
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const routes = bandRoutes();
+    routes.empty = { success: true, deleted_count: 2 };
+    serve(routes);
+
+    const button = bandEmpty(widget, LOCATION);
+    button.focus();
+    press(button, 'Enter');
+    click(button);
+    await settle();
+
+    const dialogs = (showDialog as jest.Mock).mock.calls.map(call => call[0]);
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0].title).toBe('Empty Trash in /mnt/data');
+    expect(dialogs[0].body).toContain('/mnt/data (2 items, 3 KB)');
+    expect(dialogs[0].body).not.toContain('/home/cache');
+    expect(emptyCalls()).toHaveLength(1);
+    expect(JSON.parse(emptyCalls()[0][2].body)).toEqual({
+      scope: 'source',
+      source: LOCATION
+    });
+
+    // Neither the click nor Enter folded a section, and the reload ran
+    for (const id of ['cache', 'home:alice', LOCATION]) {
+      expect(sectionHeader(widget, id).getAttribute('aria-expanded')).toBe(
+        'true'
+      );
+    }
+    expect(window.localStorage.getItem(COLLAPSED_KEY)).toBeNull();
+    expect(sectionRows(widget, 'cache')).toHaveLength(1);
+    expect(
+      request.mock.calls.filter(call => call[0] === 'sources').length
+    ).toBeGreaterThan(1);
+  });
+
+  it('gives the focus to the fold toggle when a keyboard empty hides the band button', async () => {
+    showVolumesOn();
+    const widget = await openAttached(bandRoutes());
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const routes = bandRoutes();
+    routes.sources = (routes.sources as ISource[]).map(source =>
+      source.id === LOCATION ? sourceOf(LOCATION, 0, '0 B') : source
+    );
+    routes[LISTING] = listOf([]);
+    routes.empty = { success: true, deleted_count: 2 };
+    serve(routes);
+
+    const button = bandEmpty(widget, LOCATION);
+    button.focus();
+    press(button, 'Enter');
+    click(button);
+    await settle();
+    expect(button.hidden).toBe(true);
+    expect(document.activeElement).toBe(sectionHeader(widget, LOCATION));
+  });
+
+  it('reports a failed source empty as the cleans report theirs', async () => {
+    showVolumesOn();
+    const widget = await open(bandRoutes());
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const routes = bandRoutes();
+    routes.empty = () => Promise.reject(new Error('Unknown trash source'));
+    serve(routes);
+
+    click(bandEmpty(widget, LOCATION));
+    await settle();
+    expect(showErrorMessage).toHaveBeenCalledWith(
+      'Empty Trash in /mnt/data Failed',
+      'Unknown trash source'
+    );
+  });
+
+  it('hides the band button of a source holding 0 items', async () => {
+    showVolumesOn();
+    const routes = bandRoutes();
+    routes.sources = [
+      sourceOf('xdg', 1, '5 B'),
+      sourceOf('cache', 0, '0 B'),
+      sourceOf('home:alice', 1, '2 KB')
+    ];
+    routes['list?source=cache'] = listOf([]);
+    const widget = await open(routes);
+
+    expect(bandEmpty(widget, 'cache').hidden).toBe(true);
+    expect(bandEmpty(widget, 'home:alice').hidden).toBe(false);
+  });
+
+  // ACC-SCOPE-93-HOME-EMPTY: the summary bar button empties the XDG trash alone
+  const summaryEmpty = (widget: TrashWidget) =>
+    find<HTMLButtonElement>(
+      widget,
+      '.jp-TrashPanel-summary .jp-TrashPanel-sectionEmpty'
+    );
+
+  /** Band routes whose XDG trash answers empty once the empty has run. */
+  function xdgEmptiedRoutes(): Record<string, Route> {
+    const routes = bandRoutes();
+    routes.sources = (routes.sources as ISource[]).map(source =>
+      source.id === 'xdg' ? sourceOf('xdg', 0, '0 B') : source
+    );
+    routes.list = listOf([]);
+    routes.empty = { success: true, deleted_count: 1 };
+    return routes;
+  }
+
+  it('with Show Volumes on, the summary bar button posts scope source xdg after a dialog naming the XDG trash', async () => {
+    showVolumesOn();
+    const widget = await open(bandRoutes());
+    const button = summaryEmpty(widget);
+    expect(button.hidden).toBe(false);
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.title).toBe('Empty Trash in Trash');
+    expect(button.querySelector('svg')!.dataset.icon).toBe('trash');
+    expect(summary(widget).lastElementChild).toBe(button);
+
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    serve(xdgEmptiedRoutes());
+    click(button);
+    await settle();
+
+    const dialogs = (showDialog as jest.Mock).mock.calls.map(call => call[0]);
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0].title).toBe('Empty Trash in Trash');
+    expect(dialogs[0].body).toContain('Trash (1 item, 5 B)');
+    expect(dialogs[0].body).not.toContain('/home/cache');
+    expect(dialogs[0].body).not.toContain('/mnt/data');
+    expect(emptyCalls()).toHaveLength(1);
+    expect(JSON.parse(emptyCalls()[0][2].body)).toEqual({
+      scope: 'source',
+      source: 'xdg'
+    });
+    expect(rows(widget)).toHaveLength(0);
+    expect(button.hidden).toBe(true);
+    expect(veil(widget).hidden).toBe(true);
+    // The other trashes keep their rows
+    expect(sectionRows(widget, LOCATION)).toHaveLength(2);
+  });
+
+  it('hides the summary bar button at 0 items and while Show Volumes is off', async () => {
+    const off = await open(bandRoutes());
+    expect(rows(off).length).toBeGreaterThan(0);
+    expect(summaryEmpty(off).hidden).toBe(true);
+
+    showVolumesOn();
+    const on = await open(bandRoutes());
+    expect(summaryEmpty(on).hidden).toBe(false);
+    serve(bandRoutes());
+    await (on as any)._commands.execute('trash:show-volumes');
+    expect(summaryEmpty(on).hidden).toBe(true);
+
+    const empty = await open(xdgEmptiedRoutes());
+    expect(summaryEmpty(empty).hidden).toBe(true);
+  });
+
+  it('keeps the focus in the panel after a keyboard empty from the summary bar', async () => {
+    showVolumesOn();
+    const widget = await openAttached(bandRoutes());
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    serve(xdgEmptiedRoutes());
+
+    const button = summaryEmpty(widget);
+    button.focus();
+    press(button, 'Enter');
+    click(button);
+    await settle();
+    expect(button.hidden).toBe(true);
+    // The button hands the focus to the main list; the emptied list hides and
+    // hands it on to the refresh button, never to the page body
+    expect(document.activeElement).toBe(refreshButton(widget));
+  });
+
+  it('keeps the focus in the panel after a keyboard empty from the header button', async () => {
+    showVolumesOn();
+    const widget = await openAttached(locationOnlyRoutes(1));
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    serve({
+      ...locationOnlyRoutes(0),
+      empty: { success: true, deleted_count: 1, sources: [] }
+    });
+
+    const button = emptyButton(widget);
+    button.focus();
+    press(button, 'Enter');
+    click(button);
+    await settle();
+    expect(button.hidden).toBe(true);
+    // The main list is already hidden, so the button hands the focus to the
+    // refresh button, never to the page body
+    expect(document.activeElement).toBe(refreshButton(widget));
+  });
+
+  it('puts the band button beside the fold toggle button, not inside it', async () => {
+    showVolumesOn();
+    const widget = await open(bandRoutes());
+    const header = sectionHeader(widget, 'cache');
+    const button = bandEmpty(widget, 'cache');
+
+    expect(button.tagName).toBe('BUTTON');
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.title).toBe('Empty Trash in /home/cache');
+    expect(button.closest('.jp-TrashPanel-sectionHeader')).toBeNull();
+    expect(header.contains(button)).toBe(false);
+    expect(button.parentElement).toBe(header.parentElement);
+    expect(header.nextElementSibling).toBe(button);
+    expect(button.querySelector('svg')!.dataset.icon).toBe('trash');
   });
 });

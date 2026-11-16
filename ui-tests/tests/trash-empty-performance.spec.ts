@@ -111,9 +111,10 @@ test('Empty Trash does not freeze the server', async ({ page }) => {
     .click();
 
   const startedAt = Date.now();
+  // The header button runs Clean All Sources (ACC-SCOPE-88-EMPTY-ALL)
   await page
     .locator('.jp-Dialog')
-    .getByRole('button', { name: 'Empty Trash' })
+    .getByRole('button', { name: 'Clean All Sources' })
     .click();
 
   const response = await emptyResponse;

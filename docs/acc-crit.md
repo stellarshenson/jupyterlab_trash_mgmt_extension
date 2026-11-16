@@ -613,4 +613,85 @@ Additional trash sources shown below the main list, their collapsible sections, 
   - test-tags: FUNCTIONAL
   - log: 2026-11-15T19:13:39Z @kj added
   - log: 2026-11-15T20:46:25Z @kj closed
+- [x] `ACC-SCOPE-86-SHOW-VOLUMES` **Source sections hidden until Show Volumes is checked** - HIGH; right-click on the panel header opens a menu with a checkable Show Volumes entry, also in the command palette under Trash; off by default; while off, no source section is drawn below the main list; checking it draws them; the choice survives a reload
+  - evidence: jest 'draws the sections when run, saves the choice, and a new widget starts with it on', off-while-unset it.each; index.spec palette entry; Galata 'a right-click on the header turns Show Volumes on and the sections show'; Galata 23/23 wf_b1e89586-3c0
+  - related: ACC-SCOPE-67-SOURCES, ACC-SCOPE-76-LOCATION-TRASH, ACC-SCOPE-82-SECTION-SHARE - these sections now show only while Show Volumes is checked
+  - test: jest: no sections by default; the header menu holds Show Volumes unchecked; running it draws the sections and a new widget keeps them; Galata: right-click the header, click Show Volumes, a section shows
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T05:23:32Z @kj added
+  - log: 2026-11-16T08:13:17Z @kj closed
+- [x] `ACC-SCOPE-87-SECTION-EMPTY` **Each source section has its own trash button** - HIGH; while the sections show, each section band carries a trash button at its right end that empties that source alone, after a confirmation naming the source with its count and size; other sources keep their items; hidden while the section holds 0 items; a click does not fold the section
+  - evidence: pytest TestLocationEmpty test_scope_source_empties_only_that_source, unknown id 400, other cached sizes kept; jest band empty after a dialog naming its source; Galata 'a band's trash button names its own source in the dialog'; Galata 23/23 wf_b1e89586-3c0
+  - related: ACC-SCOPE-80-LOCATION-EMPTY
+  - test: pytest: POST empty for one source id empties only it, an unknown id answers 400; jest: the band button posts its source id, fold state unchanged; Galata: click one band's button, the dialog names that source
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T05:23:32Z @kj added
+  - log: 2026-11-16T08:13:17Z @kj closed
+- [x] `ACC-SCOPE-88-EMPTY-ALL` **Header trash button empties every trash** - HIGH; the panel header trash button empties the XDG trash and every source section's trash (cache, home trashes, location trashes), as Clean All Sources does; its confirmation lists each source with count and size; the button shows while any source holds an item, sections shown or hidden
+  - evidence: jest header button posts scope all after listing every source, Show Volumes off and on; pytest test_scope_all_empties_every_location_trash; Galata 'the header trash button lists every source in its dialog', trash-empty-performance real scope-all POST; Galata 23/23 wf_b1e89586-3c0
+  - related: ACC-HEAD-4, ACC-SCOPE-70-GLOBAL-CLEAN - same scope as Clean All Sources; hidden only while every source holds 0 items
+  - test: jest: XDG empty, a location holding items: the button shows, accept posts scope all; Galata: stubbed sources, click the header button, the dialog lists every source
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T05:23:37Z @kj added
+  - log: 2026-11-16T08:13:17Z @kj closed
+- [x] `ACC-SCOPE-89-BAND-DESIGN` **Section band button follows the design system** - MEDIUM; the band trash button keeps the jupyterlab-extension design system Sections & headers rules: a box no taller than the band with the 14px glyph, so the band stays 21px in stock themes; a native button outside the fold toggle, reached by Tab, ringed on focus-visible; header trash button danger hover
+  - evidence: jest 'puts the band button beside the fold toggle button, not inside it'; Galata 'a band is 21px with and without its trash button, and the button is no taller'; Galata 23/23 wf_b1e89586-3c0
+  - related: ACC-SCOPE-71-SECTION-PARITY, ACC-SCOPE-87-SECTION-EMPTY
+  - test: Galata: band height 21px with and without the button, button height not above the band; jest: the button is not inside the fold toggle button
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T05:23:44Z @kj added
+  - log: 2026-11-16T08:13:17Z @kj closed
+- [x] `ACC-SCOPE-90-MERGED-LIST` **Main list merges every source while Show Volumes is off** - HIGH; while Show Volumes is off, the main list holds the top-level items of every source in the current sort; the summary bar counts and sizes them all; each source's rows join as it answers; one name in two sources gives two rows; while on, only the XDG trash
+  - evidence: jest 'merges a location answering later into the sorted main list and sums the summary', XDG-only main list while on; Galata 'with Show Volumes off the xdg and location rows are one list' (split on, merged again off); Galata 20/20 wf_0d3f238d-fe5
+  - related: ACC-SCOPE-86-SHOW-VOLUMES, ACC-HEAD-5 - the summary bar sums every source while the list is merged, ACC-SCOPE-74-STREAM
+  - test: jest: stub xdg and a location answering later; off: rows of both in one sorted list, summary sums them, a shared name gives two rows; on: xdg rows only; Galata: stubbed sources, merged rows split on Show Volumes
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T05:32:42Z @kj added
+  - log: 2026-11-16T05:32:42Z @kj owner chose the merged list over the XDG trash only: the user is most interested in the workspace trash, which must show while Show Volumes is off
+  - log: 2026-11-16T08:13:17Z @kj closed
+- [x] `ACC-SCOPE-91-MERGED-ACTIONS` **Merged rows act on their own source** - HIGH; in the merged list, Restore, Delete and opening a folder act on the row's own source; delete takes a source id as restore does, answering 400 for an unknown id or a path leaving that source's trash; every row offers Restore
+  - evidence: pytest TestLocationDelete test_delete_with_a_source_deletes_only_there, test_unknown_source_is_400, escaping paths 400; jest 'sends the location source id on restore, delete and folder entry of a location row'; Galata 'delete a location row from the merged list'; Galata 23/23 wf_b1e89586-3c0
+  - related: ACC-SCOPE-78-LOCATION-RESTORE, ACC-SCOPE-79-PATH-GUARD
+  - test: pytest: POST delete with a location source id deletes only there, unknown id 400, escaping path 400; jest: restore, delete and folder entry of a location row send its source id; Galata: delete a location row from the merged list
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T05:32:42Z @kj added
+  - log: 2026-11-16T07:01:31Z @kj amended text "in the merged list, Restore, Delete and opening a folder act on the row's own source; delete takes a source id as restore does, answering 400 for an unknown id or a path leaving that source's trash; cache and home trash rows offer no Restore, as in their sections" -> "in the merged list, Restore, Delete and opening a folder act on the row's own source; delete takes a source id as restore does, answering 400 for an unknown id or a path leaving that source's trash; every row offers Restore"
+  - log: 2026-11-16T07:01:31Z @kj owner after review round 1: if there is a trash, there is restore; cache and /home/<name> rows offer Restore too (ACC-SCOPE-92-RESTORE-ALL)
+  - log: 2026-11-16T08:13:17Z @kj closed
+- [x] `ACC-SCOPE-92-RESTORE-ALL` **Every trash row restores** - HIGH; every row of every trash offers Restore by right-click and Shift+F10, in the merged list and in every section, /home/cache and /home/<name> trashes included; Restore moves the item to its original path as for a location row; these rows take the row hover too
+  - evidence: pytest TestHomesRestore restores cache and home:alice items, existing destination 409; jest Restore on cache and home:alice rows posts the source id; Galata 'right-click on a cache row restores it with its source'; Galata 23/23 wf_b1e89586-3c0
+  - related: ACC-SCOPE-78-LOCATION-RESTORE, ACC-SCOPE-84-ROW-HOVER - replaces its no-hover rule for cache and home rows, ACC-SCOPE-91-MERGED-ACTIONS
+  - test: jest: a cache row and a home row, merged and in their sections, offer Restore and post their source id; Galata: restore a stubbed cache section row
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T07:01:31Z @kj added
+  - log: 2026-11-16T08:13:17Z @kj closed
+- [x] `ACC-SCOPE-93-HOME-EMPTY` **Home trash has its own empty button** - HIGH; while Show Volumes is on, the summary bar of the main list carries a trash button that empties only the XDG trash, after a confirmation naming it with its count and size; hidden at 0 items and while Show Volumes is off
+  - evidence: jest 'with Show Volumes on, the summary bar button posts scope source xdg after a dialog naming the XDG trash', hidden at 0 items and while off; Galata 'the summary bar trash button names the home trash in its dialog'; Galata 23/23 wf_b1e89586-3c0
+  - related: ACC-SCOPE-87-SECTION-EMPTY, ACC-SCOPE-88-EMPTY-ALL
+  - test: jest: Show Volumes on, the summary button empties only xdg after the dialog; hidden at 0 items and with Show Volumes off; Galata: click it, the dialog names the home trash
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T07:01:31Z @kj added
+  - log: 2026-11-16T08:13:17Z @kj closed
+- [x] `ACC-SCOPE-94-EMPTY-FOCUS` **Focus stays in the panel after an empty** - MEDIUM; after a keyboard empty from a section or summary bar trash button, when that button hides, the focus moves to that section's fold toggle or to the main list, never to the page body
+  - evidence: jest 'gives the focus to the fold toggle when a keyboard empty hides the band button', summary bar and header button cases; Galata 'a keyboard empty from a band button leaves the focus on its fold toggle'; Galata 20/20 wf_0d3f238d-fe5
+  - related: ACC-SCOPE-87-SECTION-EMPTY, ACC-SCOPE-93-HOME-EMPTY
+  - test: jest: focus a band button, empty it, the fold toggle holds the focus; Galata: Tab to a band button, Enter, accept, the focus is inside the panel
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T07:01:32Z @kj added
+  - log: 2026-11-16T08:13:18Z @kj closed
+- [x] `ACC-SCOPE-95-BAND-LINE` **Section band stays one line** - MEDIUM; a section band stays one 21px line at any panel width: a long folder label shortens with an ellipsis and its tooltip names it in full; the item count and size stay visible
+  - evidence: jest 'keeps the band one line, the label text titled with its full label', count span does not shrink; Galata 'a band with a long label stays one 21px line at 280px and keeps its count'; Galata 23/23 wf_b1e89586-3c0
+  - related: ACC-SCOPE-89-BAND-DESIGN, ACC-SCOPE-69-COUNTS
+  - test: Galata: panel 280px wide, long label: band height 21px, count visible, label tooltip holds the full path
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T07:01:41Z @kj added
+  - log: 2026-11-16T08:13:18Z @kj closed
+- [x] `ACC-SCOPE-96-ASYNC-ACTIONS` **Actions do not wait for trash listings** - HIGH; Delete, Restore and every empty hold the veil only while their own request runs; rows it removed disappear when it answers; each trash's fresh listing redraws its rows when that trash answers, so a slow or hung trash holds back no other; a listing started before the action is not drawn
+  - evidence: jest delete, Clean All Sources and Clean Workspace remove rows and lower the veil before the next listing answers, older listings dropped; make test jest 140/140 wf_b1e89586-3c0; review round 3 SHIP wf_545be98a-3c9
+  - related: ACC-SCOPE-90-MERGED-LIST, ACC-SCOPE-91-MERGED-ACTIONS
+  - test: jest: hold a location listing; delete an XDG row; the veil drops and the row is gone before the location answers; a pre-action listing answering late is ignored
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T07:01:49Z @kj added; reason: owner asked for event-driven actions; every clause names one observable rule of it
+  - log: 2026-11-16T07:01:49Z @kj owner after review round 1: make it async event driven; replaces the wait for every listing before the veil drops
+  - log: 2026-11-16T08:13:18Z @kj closed
 

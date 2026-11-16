@@ -13,6 +13,15 @@ import type { Route } from '@playwright/test';
  * ACC-SCOPE-73-ABSENT-SOURCE: a source missing from the answer has no section.
  * ACC-SCOPE-74-STREAM: each section lists as soon as its own answer arrives.
  * ACC-SCOPE-75-STATIC-HEADERS: the section header and caret carry no motion.
+ * ACC-SCOPE-86-SHOW-VOLUMES: the sections show only while Show Volumes is
+ *   checked in the header menu; every case above turns it on first.
+ * ACC-SCOPE-90-MERGED-LIST: while it is off, every source's rows are one list.
+ * ACC-SCOPE-91-MERGED-ACTIONS: a location row of that list deletes in its own
+ *   source.
+ * ACC-SCOPE-88-EMPTY-ALL: the header trash button's dialog lists every source.
+ * ACC-SCOPE-87-SECTION-EMPTY: a band's trash button's dialog names its source.
+ * ACC-SCOPE-89-BAND-DESIGN: the band stays 21px with and without its button.
+ * ACC-SCOPE-93-HOME-EMPTY: the summary bar button's dialog names the XDG trash.
  *
  * Every answer the section UI reads is stubbed with page.route, so the test
  * controls the data and reads nothing from the real trash. The main listing
@@ -28,6 +37,8 @@ const PANEL = '#jp-trash-panel';
 // sources pattern ends in * to admit it; the list pattern's own * admits it.
 const SOURCES_ROUTE = '**/jupyterlab-trash-mgmt-extension/sources*';
 const SOURCE_LIST_ROUTE = '**/jupyterlab-trash-mgmt-extension/list?source=*';
+const SHOW_VOLUMES_KEY =
+  '@stellarshenson/jupyterlab-trash-mgmt-extension:panel:show-volumes';
 
 interface IStubSource {
   id: string;
@@ -154,6 +165,13 @@ async function stubMainList(
   );
 }
 
+/** Save Show Volumes as on before the page loads, as the header menu does. */
+async function showVolumesOn(page: IJupyterLabPageFixture): Promise<void> {
+  await page.addInitScript(key => {
+    window.localStorage.setItem(key, 'true');
+  }, SHOW_VOLUMES_KEY);
+}
+
 /** Show the panel and wait for its first main listing. */
 async function openPanel(page: IJupyterLabPageFixture): Promise<void> {
   const tab = page.locator(TAB);
@@ -184,6 +202,7 @@ test.use({ autoGoto: false });
 test('renders one section per source, in server order, with its own count and size', async ({
   page
 }) => {
+  await showVolumesOn(page);
   await stubSources(page, SOURCES, {
     cache: CACHE_ITEMS,
     'home:alice': ALICE_ITEMS
@@ -239,6 +258,7 @@ test('renders one section per source, in server order, with its own count and si
 test('a header click collapses a section and the state survives a reload', async ({
   page
 }) => {
+  await showVolumesOn(page);
   await stubSources(page, SOURCES, {
     cache: CACHE_ITEMS,
     'home:alice': ALICE_ITEMS
@@ -292,6 +312,7 @@ test('a header click collapses a section and the state survives a reload', async
 test('Enter and Space on a focused header toggle its section', async ({
   page
 }) => {
+  await showVolumesOn(page);
   await stubSources(page, SOURCES, {
     cache: CACHE_ITEMS,
     'home:alice': ALICE_ITEMS
@@ -350,6 +371,7 @@ test('a held source listing does not hold back another section', async ({
     }
   };
 
+  await showVolumesOn(page);
   await stubSources(page, SOURCES, {
     cache: CACHE_ITEMS,
     'home:alice': heldAlice
@@ -379,6 +401,7 @@ test('a held source listing does not hold back another section', async ({
 });
 
 test('the section header and caret carry no motion', async ({ page }) => {
+  await showVolumesOn(page);
   await stubSources(page, SOURCES, {
     cache: CACHE_ITEMS,
     'home:alice': ALICE_ITEMS
@@ -440,6 +463,7 @@ async function openLongSections(
   page: IJupyterLabPageFixture,
   mainItems: IStubItem[]
 ): Promise<void> {
+  await showVolumesOn(page);
   await stubMainList(page, mainItems);
   await stubSources(page, LONG_SOURCES, {
     cache: manyItems('cache'),
@@ -550,8 +574,8 @@ test('with an empty main list the sections reach the panel bottom', async ({
  * ACC-SCOPE-76-LOCATION-TRASH: a location trash is a section after the cache
  *   and home sections, labelled with its folder.
  * ACC-SCOPE-78-LOCATION-RESTORE: its row opens a Restore menu by right-click
- *   or Shift+F10, and Restore posts the path with the source id. A cache row
- *   has no Restore menu.
+ *   or Shift+F10, and Restore posts the path with the source id.
+ * ACC-SCOPE-92-RESTORE-ALL: a cache row restores the same way.
  */
 const LOCATION_ID = 'location:/mnt/data/.Trash-1000';
 const LOCATION_SOURCES: IStubSource[] = [
@@ -576,6 +600,7 @@ const restoreMenuItem = (page: IJupyterLabPageFixture) =>
   page.locator('.lm-Menu .lm-Menu-itemLabel', { hasText: /^Restore$/ });
 
 async function stubLocation(page: IJupyterLabPageFixture): Promise<void> {
+  await showVolumesOn(page);
   await stubSources(page, LOCATION_SOURCES, {
     cache: CACHE_ITEMS,
     'home:alice': ALICE_ITEMS,
@@ -621,14 +646,9 @@ test('right-click on a location row restores it with its source', async ({
   await stubLocation(page);
 
   // ACC-SCOPE-84-ROW-HOVER: a location row takes the main-list hover
-  // background; a cache row, which has no Restore menu, keeps its own.
+  // background, and so does a cache row (ACC-SCOPE-92-RESTORE-ALL).
   const background = (locator: ReturnType<typeof sectionRows>) =>
     locator.evaluate(element => getComputedStyle(element).backgroundColor);
-  const cacheRow = sectionRows(page, 'cache').first();
-  const cacheBefore = await background(cacheRow);
-  await cacheRow.hover();
-  expect(await background(cacheRow)).toBe(cacheBefore);
-
   const hoverColor = await page.locator(PANEL).evaluate(panel => {
     // Resolve the variable to the same rgb() form backgroundColor reports.
     const probe = document.createElement('div');
@@ -638,6 +658,9 @@ test('right-click on a location row restores it with its source', async ({
     probe.remove();
     return color;
   });
+  const cacheRow = sectionRows(page, 'cache').first();
+  await cacheRow.hover();
+  await expect.poll(() => background(cacheRow)).toBe(hoverColor);
   const locationRow = sectionRows(page, LOCATION_ID);
   await locationRow.hover();
   await expect.poll(() => background(locationRow)).toBe(hoverColor);
@@ -667,15 +690,380 @@ test('Shift+F10 on a focused location row opens the Restore menu', async ({
   await expect(restoreMenuItem(page)).toBeVisible();
 });
 
-test('a cache row opens no Restore menu', async ({ page }) => {
+test('right-click on a cache row restores it with its source', async ({
+  page
+}) => {
+  const bodies: unknown[] = [];
+  await page.route(RESTORE_ROUTE, async route => {
+    bodies.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        restored_to: CACHE_ITEMS[0].original_path
+      })
+    });
+  });
   await stubLocation(page);
 
   await sectionRows(page, 'cache').first().click({ button: 'right' });
-  // Give a menu the time to open; the location row below shows it would.
-  await page.waitForTimeout(500);
-  await expect(restoreMenuItem(page)).toHaveCount(0);
-
-  await page.keyboard.press('Escape');
-  await sectionRows(page, LOCATION_ID).click({ button: 'right' });
   await expect(restoreMenuItem(page)).toBeVisible();
+  await restoreMenuItem(page).click();
+
+  await expect.poll(() => bodies.length).toBe(1);
+  expect(bodies[0]).toEqual({
+    trash_path: CACHE_ITEMS[0].trash_path,
+    source: 'cache'
+  });
+});
+
+const showVolumesItem = (page: IJupyterLabPageFixture) =>
+  page.locator('.lm-Menu .lm-Menu-itemLabel', { hasText: /^Show Volumes$/ });
+
+test('a right-click on the header turns Show Volumes on and the sections show', async ({
+  page
+}) => {
+  await stubSources(page, SOURCES, {
+    cache: CACHE_ITEMS,
+    'home:alice': ALICE_ITEMS
+  });
+  await page.goto();
+  await openPanel(page);
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(0);
+
+  await page
+    .locator(`${PANEL} .jp-TrashPanel-header`)
+    .click({ button: 'right' });
+  await expect(showVolumesItem(page)).toBeVisible();
+  await showVolumesItem(page).click();
+
+  await expect(sectionRows(page, 'cache')).toHaveCount(2);
+  await expect(sectionRows(page, 'home:alice')).toHaveCount(1);
+});
+
+test('with Show Volumes off the xdg and location rows are one list', async ({
+  page
+}) => {
+  await stubMainList(page, [stubItem('main-a.txt', '1 KB')]);
+  await stubSources(page, [SOURCES[0], LOCATION_SOURCES[3]], {
+    [LOCATION_ID]: [LOCATION_ITEM]
+  });
+  await page.goto();
+  await openPanel(page);
+
+  const items = page.locator(
+    `${PANEL} .jp-TrashPanel-list .jp-TrashPanel-item`
+  );
+  await expect(items).toHaveCount(2);
+  await expect(items.filter({ hasText: 'main-a.txt' })).toHaveCount(1);
+  await expect(
+    items.and(page.locator(`[data-source="${LOCATION_ID}"]`))
+  ).toContainText('data.csv');
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(0);
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-summaryText`)).toHaveText(
+    '2 items \u00B7 2.0 KB'
+  );
+
+  // Show Volumes on splits the merged rows: the main list keeps the XDG row
+  // and the location row moves to its section; off merges them again.
+  const toggleShowVolumes = async (): Promise<void> => {
+    await page
+      .locator(`${PANEL} .jp-TrashPanel-header`)
+      .click({ button: 'right' });
+    await showVolumesItem(page).click();
+  };
+  await toggleShowVolumes();
+  await expect(sectionRows(page, LOCATION_ID)).toHaveCount(1);
+  await expect(sectionRows(page, LOCATION_ID)).toContainText('data.csv');
+  await expect(items).toHaveCount(1);
+  await expect(items).toContainText('main-a.txt');
+  await expect(
+    items.and(page.locator(`[data-source="${LOCATION_ID}"]`))
+  ).toHaveCount(0);
+
+  await toggleShowVolumes();
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(0);
+  await expect(items).toHaveCount(2);
+  await expect(
+    items.and(page.locator(`[data-source="${LOCATION_ID}"]`))
+  ).toContainText('data.csv');
+});
+
+const dialog = (page: IJupyterLabPageFixture) => page.locator('.jp-Dialog');
+
+/** Close the open dialog with Cancel, so nothing is sent to the server. */
+async function cancelDialog(page: IJupyterLabPageFixture): Promise<void> {
+  await dialog(page).getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog(page)).toHaveCount(0);
+}
+
+// The cache-buster query follows the path, as on the sources route.
+const DELETE_ROUTE = '**/jupyterlab-trash-mgmt-extension/delete*';
+
+test('delete a location row from the merged list', async ({ page }) => {
+  const bodies: unknown[] = [];
+  await page.route(DELETE_ROUTE, async route => {
+    bodies.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true })
+    });
+  });
+  await stubMainList(page, [stubItem('main-a.txt', '1 KB')]);
+  // The location answers without its row once the delete has reached it
+  await stubSources(page, [SOURCES[0], LOCATION_SOURCES[3]], {
+    [LOCATION_ID]: route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          stubListing(bodies.length > 0 ? [] : [LOCATION_ITEM])
+        )
+      })
+  });
+  await page.goto();
+  await openPanel(page);
+
+  const items = page.locator(
+    `${PANEL} .jp-TrashPanel-list .jp-TrashPanel-item`
+  );
+  const row = items.and(page.locator(`[data-source="${LOCATION_ID}"]`));
+  await expect(row).toContainText('data.csv');
+  await row.click();
+  await row.click({ button: 'right' });
+  await page
+    .locator('.lm-Menu .lm-Menu-itemLabel', {
+      hasText: /^Delete Permanently$/
+    })
+    .click();
+  await dialog(page)
+    .getByRole('button', { name: 'Delete', exact: true })
+    .click();
+
+  await expect.poll(() => bodies.length).toBe(1);
+  expect(bodies[0]).toEqual({
+    trash_path: LOCATION_ITEM.trash_path,
+    source: LOCATION_ID
+  });
+  await expect(row).toHaveCount(0);
+  await expect(items).toHaveCount(1);
+});
+
+test('the header trash button lists every source in its dialog', async ({
+  page
+}) => {
+  await stubLocation(page);
+
+  await page.locator(`${PANEL} .jp-TrashPanel-header-button-danger`).click();
+  await expect(dialog(page)).toContainText('Clean All Sources');
+  for (const text of [
+    'Trash (0 items, 0 B)',
+    '/home/cache (2 items, 1.2 MB)',
+    '/home/alice (1 item, 7 KB)',
+    '/mnt/data (1 item, 3 KB)'
+  ]) {
+    await expect(dialog(page)).toContainText(text);
+  }
+  await cancelDialog(page);
+});
+
+test("a band's trash button names its own source in the dialog", async ({
+  page
+}) => {
+  await stubLocation(page);
+
+  await section(page, LOCATION_ID)
+    .locator('.jp-TrashPanel-sectionEmpty')
+    .click();
+  await expect(dialog(page)).toContainText('Empty Trash in /mnt/data');
+  await expect(dialog(page)).toContainText('/mnt/data (1 item, 3 KB)');
+  await expect(dialog(page)).not.toContainText('/home/cache');
+  await expect(sectionHeader(page, LOCATION_ID)).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  );
+  await cancelDialog(page);
+});
+
+// ACC-SCOPE-94-EMPTY-FOCUS: a keyboard empty that hides the band button hands
+// the focus to that section's fold toggle, inside the panel.
+test('a keyboard empty from a band button leaves the focus on its fold toggle', async ({
+  page
+}) => {
+  const bodies: unknown[] = [];
+  await page.route('**/jupyterlab-trash-mgmt-extension/empty*', async route => {
+    bodies.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, deleted_count: 1, errors: [] })
+    });
+  });
+  await showVolumesOn(page);
+  // Once the empty POST has arrived, the location reports and lists nothing
+  const emptied = () => bodies.length > 0;
+  await stubSources(page, [SOURCES[0], LOCATION_SOURCES[3]], {
+    [LOCATION_ID]: route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(stubListing(emptied() ? [] : [LOCATION_ITEM]))
+      })
+  });
+  await page.route(SOURCES_ROUTE, route =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        SOURCES[0],
+        emptied()
+          ? { ...LOCATION_SOURCES[3], item_count: 0, total_size: '0 B' }
+          : LOCATION_SOURCES[3]
+      ])
+    })
+  );
+  await page.goto();
+  await openPanel(page);
+  await expect(sectionRows(page, LOCATION_ID)).toHaveCount(1);
+
+  const toggle = sectionHeader(page, LOCATION_ID);
+  const button = section(page, LOCATION_ID).locator(
+    '.jp-TrashPanel-sectionEmpty'
+  );
+  await toggle.focus();
+  await page.keyboard.press('Tab');
+  await expect(button).toBeFocused();
+
+  await page.keyboard.press('Enter');
+  await expect(dialog(page)).toContainText('Empty Trash in /mnt/data');
+  await page.keyboard.press('Enter');
+  await expect(dialog(page)).toHaveCount(0);
+
+  await expect.poll(() => bodies.length).toBe(1);
+  expect(bodies[0]).toEqual({ scope: 'source', source: LOCATION_ID });
+  await expect(button).toBeHidden();
+  await expect(toggle).toBeFocused();
+  const focus = await page.evaluate(() => {
+    const active = document.activeElement;
+    return {
+      inPanel:
+        document.querySelector('#jp-trash-panel')?.contains(active) ?? false,
+      onBody: active === document.body
+    };
+  });
+  expect(focus).toEqual({ inPanel: true, onBody: false });
+});
+
+// ACC-SCOPE-93-HOME-EMPTY: with Show Volumes on, the summary bar button empties
+// the XDG trash alone; the bar keeps its height with the button.
+test('the summary bar trash button names the home trash in its dialog', async ({
+  page
+}) => {
+  await showVolumesOn(page);
+  await stubMainList(page, [stubItem('main-a.txt', '1 KB')]);
+  await stubSources(
+    page,
+    [{ ...SOURCES[0], item_count: 1, total_size: '1 KB' }, ...SOURCES.slice(1)],
+    { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
+  );
+  await page.goto();
+  await openPanel(page);
+
+  const bar = page.locator(`${PANEL} .jp-TrashPanel-summary`);
+  const button = bar.locator('.jp-TrashPanel-sectionEmpty');
+  await expect(button).toBeVisible();
+  const withButton = (await bar.boundingBox())!;
+  const box = (await button.boundingBox())!;
+  await button.evaluate(element => ((element as HTMLElement).hidden = true));
+  const withoutButton = (await bar.boundingBox())!;
+  await button.evaluate(element => ((element as HTMLElement).hidden = false));
+  expect(withButton.height).toBeCloseTo(withoutButton.height, 0);
+  expect(box.height).toBeLessThanOrEqual(withButton.height);
+  expect(box.x + box.width).toBeCloseTo(withButton.x + withButton.width, 0);
+
+  await button.click();
+  await expect(dialog(page)).toContainText('Empty Trash in Trash');
+  await expect(dialog(page)).toContainText('Trash (1 item, 1 KB)');
+  await expect(dialog(page)).not.toContainText('/home/cache');
+  await cancelDialog(page);
+});
+
+test('a band is 21px with and without its trash button, and the button is no taller', async ({
+  page
+}) => {
+  await showVolumesOn(page);
+  await stubSources(
+    page,
+    [
+      ...SOURCES,
+      {
+        id: 'home:bob',
+        label: '/home/bob',
+        item_count: 0,
+        total_size: '0 B',
+        error: ''
+      }
+    ],
+    { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
+  );
+  await page.goto();
+  await openPanel(page);
+
+  const band = (id: string) =>
+    section(page, id).locator('.jp-TrashPanel-sectionBand');
+  const button = (id: string) =>
+    section(page, id).locator('.jp-TrashPanel-sectionEmpty');
+  await expect(button('cache')).toBeVisible();
+  await expect(button('home:bob')).toBeHidden();
+
+  const withButton = (await band('cache').boundingBox())!;
+  const withoutButton = (await band('home:bob').boundingBox())!;
+  const box = (await button('cache').boundingBox())!;
+  expect(withButton.height).toBeCloseTo(21, 0);
+  expect(withoutButton.height).toBeCloseTo(21, 0);
+  expect(box.height).toBeLessThanOrEqual(withButton.height);
+});
+
+// ACC-SCOPE-95-BAND-LINE: at 280px a long label takes the ellipsis and keeps
+// its full text in the title; the band stays one 21px line and the count shows.
+test('a band with a long label stays one 21px line at 280px and keeps its count', async ({
+  page
+}) => {
+  const label = '/mnt/a-very-long-network-volume-name/with/many/nested/folders';
+  const id = `location:${label}/.Trash-1000`;
+  await showVolumesOn(page);
+  await stubSources(
+    page,
+    [...SOURCES, { id, label, item_count: 1, total_size: '3 KB', error: '' }],
+    { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS, [id]: [LOCATION_ITEM] }
+  );
+  await page.goto();
+  await openPanel(page);
+  await expect(sectionRows(page, id)).toHaveCount(1);
+
+  await page.evaluate(() => {
+    const panel = document.querySelector('#jp-trash-panel') as HTMLElement;
+    panel.style.width = '280px';
+  });
+  const text = sectionLabel(page, id).locator('.jp-TrashPanel-sectionText');
+  const count = sectionLabel(page, id).locator('.jp-TrashPanel-sectionCount');
+  await expect(text).toHaveAttribute('title', label);
+  await expect(count).toBeVisible();
+
+  const band = (await section(page, id)
+    .locator('.jp-TrashPanel-sectionBand')
+    .boundingBox())!;
+  const header = (await sectionHeader(page, id).boundingBox())!;
+  const countBox = (await count.boundingBox())!;
+  const truncated = await text.evaluate(
+    element => element.scrollWidth > element.clientWidth
+  );
+  expect(band.width).toBeLessThanOrEqual(280);
+  expect(band.height).toBeCloseTo(21, 0);
+  expect(countBox.x + countBox.width).toBeLessThanOrEqual(
+    header.x + header.width + 0.5
+  );
+  expect(truncated).toBe(true);
 });
