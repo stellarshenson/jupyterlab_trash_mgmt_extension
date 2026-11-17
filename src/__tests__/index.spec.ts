@@ -34,9 +34,14 @@ it('adds every command to the command palette', async () => {
   )![1];
   expect(showVolumes.label).toBe('Show Volumes');
   expect(typeof showVolumes.isToggled).toBe('function');
+  // ACC-SCOPE-101-EMPTY-BINS
+  const cleanAll = app.commands.addCommand.mock.calls.find(
+    call => call[0] === 'trash:clean-all'
+  )![1];
+  expect(cleanAll.label).toBe('Empty All Bins');
 });
 
-it('runs Clean All Sources from the trash:empty command, as the header button does', async () => {
+it('runs Empty All Bins from the trash:empty command, as the header button does', async () => {
   const cleanSources = jest.fn();
   (TrashWidget as any).prototype._cleanSources = cleanSources;
   const app = {

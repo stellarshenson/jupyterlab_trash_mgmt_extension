@@ -203,6 +203,8 @@ export class TrashWidget extends Widget {
   private _header: HTMLDivElement;
   private _summary: HTMLDivElement;
   private _summaryText: HTMLSpanElement;
+  // The count and size the summary bar shows after any trash label
+  private _summaryCount = '';
   private _summaryEmpty: HTMLButtonElement;
   private _breadcrumb: HTMLDivElement;
   private _columnHeader: HTMLDivElement;
@@ -213,8 +215,6 @@ export class TrashWidget extends Widget {
   private _refreshBtn: HTMLButtonElement;
   private _commands: CommandRegistry;
   private _contextMenu: Menu;
-  // True while the menu opened from the keyboard is showing
-  private _menuOpenedByKeyboard = false;
   private _selectedItems: Set<ITrashItem> = new Set();
   // The row a shift-click ranges from, held by row key because sorting moves
   // rows
@@ -283,6 +283,7 @@ export class TrashWidget extends Widget {
   // Off: no sections, and the top level merges every source into the main list
   private _showVolumes = loadShowVolumes();
   private _headerMenu: Menu;
+  private _headerMenuOpener: Element | null = null;
   // The Restore menu of a section row, the row it was opened on, and the
   // active row of each section, held by path because every listing answer
   // rebuilds the rows
@@ -304,27 +305,26 @@ export class TrashWidget extends Widget {
     this._contextMenu = new Menu({ commands: this._commands });
     this._contextMenu.addItem({ command: 'trash:restore' });
     this._contextMenu.addItem({ command: 'trash:delete' });
+    this._contextMenu.addItem({ type: 'separator' });
+    this._contextMenu.addItem({ command: 'trash:show-volumes' });
 
     // Clear visual state when menu closes (keep selection) and give the
-    // keyboard focus the menu took back to the list it was opened from
+    // focus the menu took back to the list it was opened from
     this._contextMenu.aboutToClose.connect(() => {
       this.node.classList.remove('jp-mod-contextMenuOpen');
-      if (!this._menuOpenedByKeyboard) {
-        return;
-      }
-      this._menuOpenedByKeyboard = false;
       this._focusListOrRefresh();
     });
 
     this._sectionMenu = new Menu({ commands: this._commands });
     this._sectionMenu.addItem({ command: 'trash:restore-from-source' });
-    // The keyboard focus the menu took goes back to the row it was opened on
+    this._sectionMenu.addItem({ type: 'separator' });
+    this._sectionMenu.addItem({ command: 'trash:show-volumes' });
+    // The focus the menu took goes back to the row it was opened on
     this._sectionMenu.aboutToClose.connect(() => {
       this.node.classList.remove('jp-mod-contextMenuOpen');
-      if (!this._menuOpenedByKeyboard || this._sectionTarget === null) {
+      if (this._sectionTarget === null) {
         return;
       }
-      this._menuOpenedByKeyboard = false;
       this._sectionParts
         .get(this._sectionTarget.source)
         ?.list.querySelector<HTMLElement>('[tabindex="0"]')
@@ -361,9 +361,18 @@ export class TrashWidget extends Widget {
 
     this._headerMenu = new Menu({ commands: this._commands });
     this._headerMenu.addItem({ command: 'trash:show-volumes' });
-    this._header.addEventListener('contextmenu', (e: MouseEvent) => {
+    // The focus the menu took goes back to the panel part it was opened on
+    this._headerMenu.aboutToClose.connect(() => {
+      const opener = this._headerMenuOpener;
+      if (opener instanceof HTMLElement && this.node.contains(opener)) {
+        opener.focus();
+      }
+    });
+    // Every right-click in the panel a row menu does not take opens Show Volumes
+    this.node.addEventListener('contextmenu', (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      this._headerMenuOpener = document.activeElement;
       this._headerMenu.open(e.clientX, e.clientY);
     });
 
@@ -503,7 +512,7 @@ export class TrashWidget extends Widget {
 
     this._commands.addCommand('trash:clean-all', {
       describedBy: { args: { type: 'object', properties: {} } },
-      label: trans.__('Clean All Sources'),
+      label: trans.__('Empty All Bins'),
       execute: () => {
         void this._cleanSources('all');
       }
@@ -531,7 +540,12 @@ export class TrashWidget extends Widget {
   toggleShowVolumes(): void {
     this._showVolumes = !this._showVolumes;
     saveShowVolumes(this._showVolumes);
+    // A removed section takes the focus with it; the main list gets it
+    const inPanel = this.node.contains(document.activeElement);
     this._renderSections();
+    if (inPanel && !this.node.contains(document.activeElement)) {
+      this._focusListOrRefresh();
+    }
     this._paintEmptyBtn();
     void this.refresh(this._pathSource === 'xdg' ? this._path : [], 'xdg');
   }
@@ -800,14 +814,15 @@ export class TrashWidget extends Widget {
   private _renderSummary(data: ITrashListResponse): void {
     const count = data.item_count;
     const noun = count === 1 ? 'item' : 'items';
-    this._summaryText.textContent = `${count} ${noun} \u00B7 ${data.total_size_formatted}`;
+    this._summaryCount = `${count} ${noun} \u00B7 ${data.total_size_formatted}`;
     this._paintEmptyBtn(count);
   }
 
   /**
    * The header trash button empties every source, so it shows while any holds
    * an item. With Show Volumes on, the summary bar button empties the XDG
-   * trash alone and shows while the main list holds an item.
+   * trash alone and shows while the main list holds an item, and the summary
+   * text starts with that trash's label.
    */
   private _paintEmptyBtn(count = this._mainList.item_count): void {
     // Inside a folder the trash holds at least that folder
@@ -821,6 +836,23 @@ export class TrashWidget extends Widget {
     const xdg = this._sources.find(source => source.id === 'xdg');
     if (xdg !== undefined) {
       this._summaryEmpty.title = trans.__('Empty Trash in %1', xdg.label);
+    }
+    // Labelled like a band: the label takes the ellipsis, the count never shrinks
+    const labelled = this._showVolumes && xdg !== undefined;
+    this._summaryText.classList.toggle('jp-TrashPanel-sectionLabel', labelled);
+    if (labelled) {
+      const text = document.createElement('span');
+      text.className = 'jp-TrashPanel-sectionText';
+      text.textContent = xdg.label;
+      text.title = xdg.label;
+      const counted = document.createElement('span');
+      counted.className = 'jp-TrashPanel-sectionCount';
+      // Before the first main listing the label stands alone
+      counted.textContent =
+        this._summaryCount && ` \u00B7 ${this._summaryCount}`;
+      this._summaryText.replaceChildren(text, counted);
+    } else {
+      this._summaryText.textContent = this._summaryCount;
     }
     // A list left empty hides too and hands the focus to the refresh button
     setHidden(
@@ -1080,13 +1112,11 @@ export class TrashWidget extends Widget {
     item: ITrashItem,
     row: HTMLElement,
     x: number,
-    y: number,
-    byKeyboard: boolean
+    y: number
   ): void {
     this._activateSectionRow(source, row.parentElement!, row);
     this._sectionTarget = { source, item };
     this.node.classList.add('jp-mod-contextMenuOpen');
-    this._menuOpenedByKeyboard = byKeyboard;
     this._sectionMenu.open(x, y);
   }
 
@@ -1187,7 +1217,7 @@ export class TrashWidget extends Widget {
     row.addEventListener('contextmenu', (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      this._openSectionMenu(source, item, row, e.clientX, e.clientY, false);
+      this._openSectionMenu(source, item, row, e.clientX, e.clientY);
     });
     row.addEventListener('keydown', (e: KeyboardEvent) => {
       if (!isMenuKey(e)) {
@@ -1196,14 +1226,7 @@ export class TrashWidget extends Widget {
       e.preventDefault();
       e.stopPropagation();
       const rect = row.getBoundingClientRect();
-      this._openSectionMenu(
-        source,
-        item,
-        row,
-        rect.left + 8,
-        rect.bottom,
-        true
-      );
+      this._openSectionMenu(source, item, row, rect.left + 8, rect.bottom);
     });
 
     const name = document.createElement('span');
@@ -1601,9 +1624,12 @@ export class TrashWidget extends Widget {
         this._selectItem(item);
         this._lastClickedAnchor = rowKey(item);
       }
+      // The row is active as after a click, so the focus the closing menu
+      // returns, keyboard focus after Escape, does not activate the first row
+      this._activePath = rowKey(item);
+      this._renderActiveRow();
 
       this.node.classList.add('jp-mod-contextMenuOpen');
-      this._menuOpenedByKeyboard = false;
       this._contextMenu.open(e.clientX, e.clientY);
     });
 
@@ -1719,7 +1745,6 @@ export class TrashWidget extends Widget {
     }
     const rect = el.getBoundingClientRect();
     this.node.classList.add('jp-mod-contextMenuOpen');
-    this._menuOpenedByKeyboard = true;
     this._contextMenu.open(rect.left + 8, rect.bottom);
   }
 
@@ -1783,6 +1808,18 @@ export class TrashWidget extends Widget {
     main = true
   ): void {
     this._trashGen++;
+    // A removed active row hands the active row to the first remaining row
+    // after it, or the last one before it, so the reload neither drops it
+    // nor scrolls the list to row 0
+    const drawn = this._sortedItems;
+    const kept = (row: ITrashItem) => !gone(row.source ?? 'xdg', row);
+    const at = drawn.findIndex(row => rowKey(row) === this._activePath);
+    if (at >= 0 && !kept(drawn[at])) {
+      const next =
+        drawn.slice(at + 1).find(kept) ??
+        drawn.slice(0, at).reverse().find(kept);
+      this._activePath = next === undefined ? null : rowKey(next);
+    }
     const strip = (
       data: ITrashListResponse,
       source: string
@@ -1923,7 +1960,7 @@ export class TrashWidget extends Widget {
     const root = PageConfig.getOption('serverRoot');
     const title =
       scope === 'all'
-        ? trans.__('Clean All Sources')
+        ? trans.__('Empty All Bins')
         : trans.__('Clean Workspace');
     const warning =
       scope === 'all'
@@ -2072,7 +2109,7 @@ export class TrashWidget extends Widget {
     }
     const title =
       scope === 'all'
-        ? trans.__('Clean All Sources')
+        ? trans.__('Empty All Bins')
         : trans.__('Clean Workspace');
     if (errors.length > 0) {
       showErrorMessage(

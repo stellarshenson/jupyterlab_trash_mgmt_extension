@@ -468,6 +468,14 @@ Operating the trash list without a mouse
   - test-tags: UNIT
   - log: 2026-10-28T21:02:55Z @kj added
   - log: 2026-10-28T22:29:58Z @kj closed
+- [x] `ACC-KEYS-102-NEIGHBOUR-ROW` **Active row moves to the neighbour after Delete or Restore** - MEDIUM; after Delete or Restore removes the active row of the main list, by mouse or keyboard, the first remaining row after it becomes active, or the last row when none follows; the list keeps its scroll position; an empty list has no active row
+  - evidence: jest 'neighbour row after a removal' 6 cases (Delete, Restore, last row, multi-select, failed delete); Galata :1197 scrollTop kept within 1px, next row active; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - related: DEF-PANEL-39-LIST-JUMP, DEF-PANEL-34-FOCUS-RING - the first-row rule stays for focus with no active row, ACC-SCOPE-100-MENU-EVERYWHERE
+  - test: jest: scroll a stubbed list, delete the active row from a mouse-opened menu, the next row is active and scrollTop unchanged; same for Restore and for the last row (previous becomes active)
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T16:06:53Z @kj added
+  - log: 2026-11-16T16:07:00Z @kj amended text "after Delete or Restore of the active row in the main list, by mouse or keyboard, the next row (or the previous one at the end) becomes the active row and the list keeps its scroll position; first row only when the list is left empty of the old neighbours" -> "MEDIUM; after Delete or Restore removes the active row of the main list, by mouse or keyboard, the first remaining row after it becomes active, or the last row when none follows; the list keeps its scroll position; an empty list has no active row"
+  - log: 2026-11-16T16:37:05Z @kj closed
 
 ## Trash sources and cleanup scope `SCOPE`
 
@@ -694,4 +702,43 @@ Additional trash sources shown below the main list, their collapsible sections, 
   - log: 2026-11-16T07:01:49Z @kj added; reason: owner asked for event-driven actions; every clause names one observable rule of it
   - log: 2026-11-16T07:01:49Z @kj owner after review round 1: make it async event driven; replaces the wait for every listing before the veil drops
   - log: 2026-11-16T08:13:18Z @kj closed
+- [x] `ACC-SCOPE-97-BUTTON-BOX` **Trash button box fits its icon** - LOW; the section band and summary bar trash buttons draw their hover and focus box as an 18px square with 2px rounded corners, centred on the 14px icon, with space between the box and the band edge; the band stays 21px
+  - evidence: Galata trash-sources:1067 18px box inside band and bar with a gap on every side, :1030 band 21px; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - related: DEF-PANEL-35-BAND-BOX, ACC-SCOPE-89-BAND-DESIGN, ACC-SCOPE-93-HOME-EMPTY - box narrowed from full band height
+  - test: Galata: Show Volumes on, hover a band trash button: box 18x18 px, inside the band with a gap on every side, band 21px; same for the summary bar button
+  - test-tags: FUNCTIONAL
+  - log: 2026-11-16T12:22:47Z @kj added
+  - log: 2026-11-16T16:37:04Z @kj closed
+- [x] `ACC-SCOPE-98-TOP-NAME` **Top section names its trash** - MEDIUM; with Show Volumes on, the main list's summary bar starts with the XDG trash label, its folder (~/.local/share/Trash by default), before the count and size, in the band label style; the same label names it in dialogs and tooltips; with Show Volumes off the summary bar is unchanged
+  - evidence: jest summary text starts with the XDG label with Show Volumes on, count and size only when off; pytest xdg label ~/.local/share/Trash; Galata :1067; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - related: DEF-PANEL-36-TOP-NAME, ACC-SCOPE-93-HOME-EMPTY - names the trash the summary bar button empties
+  - test: jest: Show Volumes on, summary text starts with ~/.local/share/Trash; off, count and size only; Galata: Show Volumes on, the summary bar shows the label
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T12:22:47Z @kj added
+  - log: 2026-11-16T16:37:04Z @kj closed
+- [x] `ACC-SCOPE-99-HOME-TILDE` **Paths under the home folder start with ~** - LOW; every trash label under the server user's home folder shows ~ in place of the home path: /home/lab/workspace shows ~/workspace, in bands, the summary bar, tooltips and dialogs; a path spelled through HOME with its symbolic links resolved also gets ~; a label outside the home folder stays absolute; labels keep the upper-case band style
+  - evidence: pytest TestSourceLabels 6 cases: ~ under HOME, both spellings of a symlinked HOME, link inside HOME keeps ~, outside absolute, empty and clean responses; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - related: DEF-PANEL-37-HOME-PATH, ACC-SCOPE-95-BAND-LINE
+  - test: pytest: GET sources with a location under HOME labels it ~/<name>; with HOME a symbolic link, a location spelled through its target is ~/<name> too; a location outside HOME keeps its absolute path
+  - test-tags: UNIT
+  - log: 2026-11-16T12:22:47Z @kj added
+  - log: 2026-11-16T14:32:49Z @kj amended text "every trash label under the server user's home folder shows ~ in place of the home path: /home/lab/workspace shows ~/workspace, in bands, the summary bar, tooltips and dialogs; a label outside the home folder stays absolute" -> "LOW; every trash label under the server user's home folder shows ~ in place of the home path: /home/lab/workspace shows ~/workspace, in bands, the summary bar, tooltips and dialogs; a path spelled through HOME with its symbolic links resolved also gets ~; a label outside the home folder stays absolute; labels keep the upper-case band style"; reason: owner decisions on review round 1 deferrals: compare both HOME spellings, keep upper-case band style
+  - log: 2026-11-16T14:32:49Z @kj edited test "pytest: GET sources with a location under HOME labels it ~/<name>, a location outside HOME keeps its absolute path" -> "pytest: GET sources with a location under HOME labels it ~/<name>; with HOME a symbolic link, a location spelled through its target is ~/<name> too; a location outside HOME keeps its absolute path"
+  - log: 2026-11-16T16:37:04Z @kj closed
+- [x] `ACC-SCOPE-100-MENU-EVERYWHERE` **Show Volumes in every panel right-click** - MEDIUM; a right-click anywhere in the panel offers the checkable Show Volumes entry: header, summary bar, main list rows and empty space, every section band and section row; in a row menu it follows the row actions after a separator; a plain right-click in the panel never opens the browser menu; keyboard focus never falls to the page body after the menu
+  - evidence: jest 'Show Volumes in every right-click' 7 targets, row menus end with separator and Show Volumes, 8 focus cases; Galata :799 menu toggles, :1165 Escape focuses list without outline; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - related: DEF-PANEL-38-MENU-BODY, ACC-SCOPE-86-SHOW-VOLUMES - the header menu entry, now in every panel menu
+  - test: Galata: Show Volumes off, right-click main list empty space, check Show Volumes, sections show; right-click a section band, uncheck it, sections hide; jest: row menus end with a separator and Show Volumes
+  - test-tags: UNIT, FUNCTIONAL
+  - log: 2026-11-16T12:22:52Z @kj added
+  - log: 2026-11-16T14:32:49Z @kj amended text "a right-click anywhere in the panel offers the checkable Show Volumes entry: header, summary bar, main list rows and empty space, every section band and section row; in a row menu it follows the row actions after a separator; a plain right-click in the panel never opens the browser menu" -> "MEDIUM; a right-click anywhere in the panel offers the checkable Show Volumes entry: header, summary bar, main list rows and empty space, every section band and section row; in a row menu it follows the row actions after a separator; a plain right-click in the panel never opens the browser menu; keyboard focus never falls to the page body after the menu"; reason: review round 1 plan: focus fell to the page body after the Show Volumes menu
+  - log: 2026-11-16T14:55:28Z @kj owner decision after review round 2: one focus rule for all panel menus - row menus opened by mouse also return the focus to their row, as the Show Volumes menu does
+  - log: 2026-11-16T16:37:04Z @kj closed
+- [x] `ACC-SCOPE-101-EMPTY-BINS` **Clean All Sources is named Empty All Bins** - LOW; the palette command, its confirmation dialog title and its failure title read Empty All Bins instead of Clean All Sources; the command id and what it empties are unchanged; README.md uses the new name
+  - evidence: jest palette label and dialog and failure titles read Empty All Bins; Galata :891; grep no 'Clean All Sources' in src, README.md, ui-tests/tests; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - related: ACC-SCOPE-70-GLOBAL-CLEAN, ACC-SCOPE-88-EMPTY-ALL - same command, new name
+  - test: jest: palette label and dialog title read Empty All Bins; grep: no 'Clean All Sources' in src/ and README.md
+  - test-tags: UNIT
+  - log: 2026-11-16T12:22:52Z @kj added
+  - log: 2026-11-16T16:37:05Z @kj closed
 

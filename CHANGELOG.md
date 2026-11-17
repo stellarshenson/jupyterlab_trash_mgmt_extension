@@ -2,6 +2,25 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.29] - 2026-11-17
+
+### Added
+
+- Show Volumes is in every right-click menu of the panel: the summary bar, the main list, every section band and every row; in a row menu it follows the row actions after a separator
+- With Show Volumes on, the summary bar starts with the home trash label, `~/.local/share/Trash` by default
+
+### Changed
+
+- A trash label under the home folder starts with `~`, as `~/workspace`; the home trash is labelled by its folder instead of `Trash`; a home folder reached through a symbolic link gets `~` in both spellings
+- Clean All Sources is named Empty All Bins in the command palette and its dialogs
+- The band and summary bar trash buttons draw an 18px box with rounded corners inside the band
+
+### Fixed
+
+- A right-click in the panel outside the header opened the browser menu
+- Keyboard focus fell to the page body after a panel menu closed or Show Volumes removed the focused band or row; every panel menu returns the focus, whether the mouse or the keyboard opened it
+- After Delete or Restore the main list jumped to its first row; the neighbour row becomes active and the list keeps its place
+
 ## [1.1.28] - 2026-11-16
 
 ### Added

@@ -22,6 +22,12 @@ import type { Route } from '@playwright/test';
  * ACC-SCOPE-87-SECTION-EMPTY: a band's trash button's dialog names its source.
  * ACC-SCOPE-89-BAND-DESIGN: the band stays 21px with and without its button.
  * ACC-SCOPE-93-HOME-EMPTY: the summary bar button's dialog names the XDG trash.
+ * ACC-SCOPE-100-MENU-EVERYWHERE: a right-click on the main list's empty space
+ *   or on a section band offers Show Volumes.
+ * ACC-SCOPE-97-BUTTON-BOX: the band and summary bar trash buttons draw an
+ *   18px box with a gap to every edge of the band or bar.
+ * ACC-SCOPE-98-TOP-NAME: with Show Volumes on, the summary bar names the XDG
+ *   trash.
  *
  * Every answer the section UI reads is stubbed with page.route, so the test
  * controls the data and reads nothing from the real trash. The main listing
@@ -790,6 +796,37 @@ test('with Show Volumes off the xdg and location rows are one list', async ({
   ).toContainText('data.csv');
 });
 
+test('a right-click on the main list empty space or a section band toggles Show Volumes', async ({
+  page
+}) => {
+  await stubMainList(page, [stubItem('main-a.txt', '1 KB')]);
+  await stubSources(page, SOURCES, {
+    cache: CACHE_ITEMS,
+    'home:alice': ALICE_ITEMS
+  });
+  await page.goto();
+  await openPanel(page);
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(0);
+
+  // Below the one row is the list's empty space
+  const list = page.locator(`${PANEL} .jp-TrashPanel-list`);
+  const box = (await list.boundingBox())!;
+  await list.click({
+    button: 'right',
+    position: { x: 20, y: box.height - 8 }
+  });
+  await expect(showVolumesItem(page)).toBeVisible();
+  await showVolumesItem(page).click();
+  await expect(sectionRows(page, 'cache')).toHaveCount(2);
+
+  await section(page, 'cache')
+    .locator('.jp-TrashPanel-sectionBand')
+    .click({ button: 'right' });
+  await expect(showVolumesItem(page)).toBeVisible();
+  await showVolumesItem(page).click();
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(0);
+});
+
 const dialog = (page: IJupyterLabPageFixture) => page.locator('.jp-Dialog');
 
 /** Close the open dialog with Cancel, so nothing is sent to the server. */
@@ -857,7 +894,7 @@ test('the header trash button lists every source in its dialog', async ({
   await stubLocation(page);
 
   await page.locator(`${PANEL} .jp-TrashPanel-header-button-danger`).click();
-  await expect(dialog(page)).toContainText('Clean All Sources');
+  await expect(dialog(page)).toContainText('Empty All Bins');
   for (const text of [
     'Trash (0 items, 0 B)',
     '/home/cache (2 items, 1.2 MB)',
@@ -981,7 +1018,7 @@ test('the summary bar trash button names the home trash in its dialog', async ({
   await button.evaluate(element => ((element as HTMLElement).hidden = false));
   expect(withButton.height).toBeCloseTo(withoutButton.height, 0);
   expect(box.height).toBeLessThanOrEqual(withButton.height);
-  expect(box.x + box.width).toBeCloseTo(withButton.x + withButton.width, 0);
+  expect(box.x + box.width).toBeLessThan(withButton.x + withButton.width);
 
   await button.click();
   await expect(dialog(page)).toContainText('Empty Trash in Trash');
@@ -1026,6 +1063,61 @@ test('a band is 21px with and without its trash button, and the button is no tal
   expect(box.height).toBeLessThanOrEqual(withButton.height);
 });
 
+// ACC-SCOPE-97-BUTTON-BOX, ACC-SCOPE-98-TOP-NAME
+test('the band and summary bar trash buttons draw an 18px box inside their band or bar, and the summary bar names the XDG trash', async ({
+  page
+}) => {
+  const xdgLabel = '~/.local/share/Trash';
+  await showVolumesOn(page);
+  await stubMainList(page, [stubItem('main-a.txt', '1 KB')]);
+  await stubSources(
+    page,
+    [
+      { ...SOURCES[0], label: xdgLabel, item_count: 1, total_size: '1 KB' },
+      ...SOURCES.slice(1)
+    ],
+    { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
+  );
+  await page.goto();
+  await openPanel(page);
+
+  const summaryText = page.locator(`${PANEL} .jp-TrashPanel-summaryText`);
+  await expect(summaryText).toHaveText(`${xdgLabel} \u00B7 1 item \u00B7 1 KB`);
+  await expect(
+    summaryText.locator('.jp-TrashPanel-sectionText')
+  ).toHaveAttribute('title', xdgLabel);
+
+  type Box = { x: number; y: number; width: number; height: number };
+  const expectInside = (box: Box, outer: Box): void => {
+    expect(box.width).toBeCloseTo(18, 0);
+    expect(box.height).toBeCloseTo(18, 0);
+    expect(box.x).toBeGreaterThan(outer.x);
+    expect(box.y).toBeGreaterThan(outer.y);
+    expect(box.x + box.width).toBeLessThan(outer.x + outer.width);
+    expect(box.y + box.height).toBeLessThan(outer.y + outer.height);
+  };
+
+  // The hover paints the button's own box, so that box is the red one
+  const band = section(page, 'cache').locator('.jp-TrashPanel-sectionBand');
+  const bandButton = section(page, 'cache').locator(
+    '.jp-TrashPanel-sectionEmpty'
+  );
+  await bandButton.hover();
+  await expect(bandButton).not.toHaveCSS(
+    'background-color',
+    'rgba(0, 0, 0, 0)'
+  );
+  const bandBox = (await band.boundingBox())!;
+  expect(bandBox.height).toBeCloseTo(21, 0);
+  expectInside((await bandButton.boundingBox())!, bandBox);
+
+  const bar = page.locator(`${PANEL} .jp-TrashPanel-summary`);
+  const barButton = bar.locator('.jp-TrashPanel-sectionEmpty');
+  await barButton.hover();
+  await expect(barButton).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  expectInside((await barButton.boundingBox())!, (await bar.boundingBox())!);
+});
+
 // ACC-SCOPE-95-BAND-LINE: at 280px a long label takes the ellipsis and keeps
 // its full text in the title; the band stays one 21px line and the count shows.
 test('a band with a long label stays one 21px line at 280px and keeps its count', async ({
@@ -1066,4 +1158,127 @@ test('a band with a long label stays one 21px line at 280px and keeps its count'
     header.x + header.width + 0.5
   );
   expect(truncated).toBe(true);
+});
+
+// ACC-SCOPE-100-MENU-EVERYWHERE: a mouse-opened row menu returns the focus to
+// the main list, which draws no focus outline (DEF-PANEL-34-FOCUS-RING)
+test('Escape from a mouse-opened row menu focuses the main list with no outline', async ({
+  page
+}) => {
+  await stubMainList(page, [
+    stubItem('main-a.txt', '1 KB'),
+    stubItem('main-b.txt', '2 KB')
+  ]);
+  await stubSources(page, [SOURCES[0]], {});
+  await page.goto();
+  await openPanel(page);
+
+  const row = page.locator(`${PANEL} .jp-TrashPanel-list .jp-TrashPanel-item`, {
+    hasText: 'main-b.txt'
+  });
+  await row.click({ button: 'right' });
+  const menu = page.locator('.lm-Menu');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+
+  const focus = await page.evaluate(() => {
+    const list = document.querySelector('#jp-trash-panel .jp-TrashPanel-list');
+    return {
+      onList: document.activeElement === list,
+      outline: list === null ? '' : getComputedStyle(list).outlineStyle
+    };
+  });
+  expect(focus).toEqual({ onList: true, outline: 'none' });
+});
+
+// ACC-KEYS-102-NEIGHBOUR-ROW (DEF-PANEL-39-LIST-JUMP): a Delete confirmed with
+// Enter keeps the list's scroll position and makes the next row active
+test('Delete from a mouse-opened menu in a scrolled list keeps the scroll and activates the next row', async ({
+  page
+}) => {
+  const all = Array.from({ length: 60 }, (_, i) =>
+    stubItem(`row-${String(i).padStart(2, '0')}.txt`, '1 KB')
+  );
+  const deleted: string[] = [];
+  await page.route(DELETE_ROUTE, async route => {
+    deleted.push(route.request().postDataJSON().trash_path);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true })
+    });
+  });
+  await page.route(
+    url =>
+      url.pathname.endsWith('/jupyterlab-trash-mgmt-extension/list') &&
+      !url.searchParams.has('source'),
+    route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          stubListing(all.filter(item => !deleted.includes(item.trash_path)))
+        )
+      })
+  );
+  await stubSources(page, [SOURCES[0]], {});
+  await page.goto();
+  await openPanel(page);
+
+  const items = page.locator(
+    `${PANEL} .jp-TrashPanel-list .jp-TrashPanel-item`
+  );
+  await expect(items).toHaveCount(60);
+  // Scroll the list, then take a row in view whose next row is in view too
+  const picked = await page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>(
+      '#jp-trash-panel .jp-TrashPanel-list'
+    )!;
+    list.scrollTop = 400;
+    const box = list.getBoundingClientRect();
+    const rows = Array.from(
+      list.querySelectorAll<HTMLElement>('.jp-TrashPanel-item')
+    );
+    const inView = (row: HTMLElement) => {
+      const rect = row.getBoundingClientRect();
+      return rect.top >= box.top && rect.bottom <= box.bottom;
+    };
+    const at = rows.findIndex(
+      (row, i) =>
+        inView(row) && rows[i + 1] !== undefined && inView(rows[i + 1])
+    );
+    const name = (row: HTMLElement) =>
+      row.querySelector('.jp-TrashPanel-item-name')!.textContent!;
+    return {
+      scrollTop: list.scrollTop,
+      row: name(rows[at]),
+      next: name(rows[at + 1])
+    };
+  });
+  expect(picked.scrollTop).toBeGreaterThan(0);
+
+  await items.filter({ hasText: picked.row }).click({ button: 'right' });
+  await page
+    .locator('.lm-Menu .lm-Menu-itemLabel', {
+      hasText: /^Delete Permanently$/
+    })
+    .click();
+  await expect(dialog(page)).toBeVisible();
+  await page.keyboard.press('Enter');
+
+  await expect.poll(() => deleted.length).toBe(1);
+  await expect(items).toHaveCount(59);
+  await expect(
+    page.locator(
+      `${PANEL} .jp-TrashPanel-list .jp-TrashPanel-item.jp-mod-active`
+    )
+  ).toContainText(picked.next);
+  const scrollTop = await page.evaluate(
+    () =>
+      document.querySelector<HTMLElement>(
+        '#jp-trash-panel .jp-TrashPanel-list'
+      )!.scrollTop
+  );
+  expect(Math.abs(scrollTop - picked.scrollTop)).toBeLessThanOrEqual(1);
 });

@@ -553,7 +553,7 @@ class TestTrashSources:
         sources = collect_sources()
 
         assert [source["id"] for source in sources] == ["xdg"]
-        assert sources[0]["label"] == "Trash"
+        assert sources[0]["label"] == str(trash_dir)
         assert sources[0]["item_count"] == 1
         assert sources[0]["total_size"] == "5 B"
         assert sources[0]["error"] == ""
@@ -584,7 +584,7 @@ class TestTrashSources:
         sources = collect_sources()
 
         assert [source["id"] for source in sources] == ["xdg", "home:alice"]
-        assert sources[1]["label"] == "/home/alice"
+        assert sources[1]["label"] == str(homes / "alice")
         assert sources[1]["item_count"] == 1
         assert sources[1]["total_size"] == "5 B"
 

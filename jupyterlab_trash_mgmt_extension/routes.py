@@ -369,6 +369,23 @@ def collect_listing(
     }
 
 
+def source_label(path, homes) -> str:
+    """The label of a source path: the server user's home folder shows as '~'.
+
+    homes is HOME as spelled, then HOME with its symbolic links resolved. The
+    path is compared as spelled and never resolved, so a symbolic link inside
+    HOME keeps its '~' label. The order matters only when one HOME spelling
+    lies inside the other.
+    """
+    for home in homes:
+        try:
+            rest = Path(path).relative_to(home)
+        except ValueError:
+            continue
+        return '~' if rest == Path('.') else f'~/{rest}'
+    return str(path)
+
+
 def source_candidates(locations=()) -> list[dict]:
     """Every possible trash source in display order, present or not.
 
@@ -377,16 +394,18 @@ def source_candidates(locations=()) -> list[dict]:
     Each monitored location adds its .Trash-<uid>, and its .Trash/<uid> when
     .Trash is a sticky directory that is not a symlink.
     """
+    user_home = Path(os.path.abspath(os.path.expanduser('~')))
+    user_homes = (user_home, user_home.resolve())
     candidates = [
         {
             'id': 'xdg',
-            'label': 'Trash',
+            'label': source_label(get_trash_dir(), user_homes),
             'path': get_trash_dir(),
             'root': get_trash_dir().parent
         },
         {
             'id': 'cache',
-            'label': '/home/cache',
+            'label': source_label(HOMES_ROOT / 'cache', user_homes),
             'path': HOMES_ROOT / 'cache',
             'root': HOMES_ROOT
         },
@@ -405,7 +424,7 @@ def source_candidates(locations=()) -> list[dict]:
         home = Path(entry.path)
         candidates.append({
             'id': f'home:{entry.name}',
-            'label': f'/home/{entry.name}',
+            'label': source_label(home, user_homes),
             'path': home / '.local' / 'share' / 'Trash',
             'root': home
         })
@@ -423,7 +442,7 @@ def source_candidates(locations=()) -> list[dict]:
         for trash in trashes:
             candidates.append({
                 'id': f'location:{trash}',
-                'label': str(top),
+                'label': source_label(top, user_homes),
                 'path': trash,
                 'root': top,
                 'location': str(top)

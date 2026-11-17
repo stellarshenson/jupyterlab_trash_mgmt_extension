@@ -391,17 +391,20 @@ button.jp-TrashPanel-sectionHeader:focus-visible {
   outline-offset: -1px;
 }
 
-/* The header trash button's glyph in a box the band's own height: no
-   min-height, so the band stays 21px, and square in the full-bleed band */
+/* The header trash button's glyph in an 18px box centred in the band, so
+   the band stays 21px and a gap shows on every side of the hover box */
 .jp-TrashPanel-sectionEmpty {
   display: flex;
   flex: 0 0 auto;
+  align-self: center;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  width: 18px;
+  height: 18px;
+  margin: 0 2px;
   padding: 0;
   border: none;
-  border-radius: 0;
+  border-radius: 2px;
   background: transparent;
   color: var(--jp-ui-font-color2);
   cursor: pointer;
@@ -413,17 +416,16 @@ button.jp-TrashPanel-sectionHeader:focus-visible {
   color: var(--jp-ui-inverse-font-color1);
 }
 
-/* Inset, so the ring stays inside the band */
+/* Inset, so the ring stays on the hover box */
 .jp-TrashPanel-sectionEmpty:focus-visible {
   outline: 1px solid var(--jp-brand-color1);
   outline-offset: -1px;
 }
 
-/* The summary bar's XDG trash button: the band button, full height at the
-   bar's right end; the negative margins keep the bar's own height */
+/* The summary bar's XDG trash button: the band button, 2px from the bar's
+   right end like the bands; -1px above and below keeps the 16px line height */
 .jp-TrashPanel-summary .jp-TrashPanel-sectionEmpty {
-  align-self: stretch;
-  margin: -4px -8px -4px 0;
+  margin: -1px -6px -1px 2px;
 }
 
 .jp-TrashPanel-caret {

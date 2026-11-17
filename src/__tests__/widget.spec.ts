@@ -4,6 +4,7 @@
 
 import { ServerConnection } from '@jupyterlab/services';
 import { PageConfig } from '@jupyterlab/coreutils';
+import { MessageLoop } from '@lumino/messaging';
 import { showDialog, showErrorMessage } from '@jupyterlab/apputils';
 import { requestAPI } from '../request';
 import { TrashWidget } from '../widget';
@@ -1638,6 +1639,93 @@ describe('failed reload after an action', () => {
   });
 });
 
+// ACC-KEYS-102-NEIGHBOUR-ROW, DEF-PANEL-39-LIST-JUMP
+describe('neighbour row after a removal', () => {
+  const names = ['r1', 'r2', 'r3', 'r4', 'r5', 'r6'];
+  const listWithout = (gone: string[]) =>
+    listOf(names.filter(name => !gone.includes(name)).map(name => file(name)));
+
+  /** Open six rows, right-click `name` and run menu item `index`. */
+  async function removeFromMenu(
+    name: string,
+    index: number,
+    action: Route,
+    gone: string[]
+  ): Promise<TrashWidget> {
+    const routes = { list: listWithout([]) };
+    const widget = await openAttached(routes);
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    rows(widget)[rowNames(widget).indexOf(name)].dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    );
+    MessageLoop.flush();
+    const menu = (widget as any)._contextMenu;
+    expect(activeName(widget)).toBe(name);
+    serve({
+      list: listWithout(gone),
+      [index === 0 ? 'restore' : 'delete']: action
+    });
+    menu.activeIndex = index;
+    menu.triggerActiveItem();
+    await settle();
+    return widget;
+  }
+
+  it.each([
+    ['Delete', 1],
+    ['Restore', 0]
+  ])(
+    '%s of the active row 3 from a mouse-opened menu makes row 4 active',
+    async (_, index) => {
+      const widget = await removeFromMenu('r3', index as number, {}, ['r3']);
+      expect(rowNames(widget)).toEqual(['r1', 'r2', 'r4', 'r5', 'r6']);
+      expect(activeName(widget)).toBe('r4');
+    }
+  );
+
+  it.each([
+    ['Delete', 1],
+    ['Restore', 0]
+  ])('%s of the last row makes the new last row active', async (_, index) => {
+    const widget = await removeFromMenu('r6', index as number, {}, ['r6']);
+    expect(activeName(widget)).toBe('r5');
+  });
+
+  it('a multi-select delete of rows 2 to 4 makes row 5 active', async () => {
+    const widget = await openAttached({ list: listWithout([]) });
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    click(rows(widget)[1]);
+    click(rows(widget)[3], { shiftKey: true });
+    rows(widget)[2].dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    );
+    MessageLoop.flush();
+    expect(selectedNames(widget)).toEqual(['r2', 'r3', 'r4']);
+    serve({ list: listWithout(['r2', 'r3', 'r4']), delete: {} });
+    const menu = (widget as any)._contextMenu;
+    menu.activeIndex = 1;
+    menu.triggerActiveItem();
+    await settle();
+    expect(rowNames(widget)).toEqual(['r1', 'r5', 'r6']);
+    expect(activeName(widget)).toBe('r5');
+  });
+
+  it('a failed delete keeps its row and the active row', async () => {
+    const widget = await removeFromMenu(
+      'r3',
+      1,
+      () => Promise.reject(new Error('denied')),
+      []
+    );
+    expect(showErrorMessage).toHaveBeenCalledWith(
+      'Delete Failed',
+      'r3: denied'
+    );
+    expect(rowNames(widget)).toEqual(names);
+    expect(activeName(widget)).toBe('r3');
+  });
+});
+
 describe('Empty Trash', () => {
   it('reports the items that could not be removed', async () => {
     const widget = await open({ list: listOf([file('one.txt')]) });
@@ -1661,7 +1749,7 @@ describe('Empty Trash', () => {
     emptyButton(widget).click();
     await settle();
     expect(showErrorMessage).toHaveBeenCalledWith(
-      'Clean All Sources Failed',
+      'Empty All Bins Failed',
       'Trash: 0 items deleted\nTrash: one.txt: denied'
     );
   });
@@ -1891,7 +1979,7 @@ describe('trash sources', () => {
     await settle();
 
     const dialog = (showDialog as jest.Mock).mock.calls[0][0];
-    expect(dialog.title).toBe('Clean All Sources');
+    expect(dialog.title).toBe('Empty All Bins');
     expect(dialog.body).toContain('Trash (1 item, 5 B)');
     expect(dialog.body).toContain('/home/cache (12 items, 40 MB)');
     expect(dialog.body).toContain('/home/alice (1 item, 2 KB)');
@@ -2036,7 +2124,11 @@ describe('location trash sections', () => {
     rightClick(locationRows(widget)[0]);
     expect(opened).toHaveBeenCalledTimes(1);
     const menu = (widget as any)._sectionMenu;
-    expect(menu.items.map((item: any) => item.label)).toEqual(['Restore']);
+    expect(menu.items.map((item: any) => item.label)).toEqual([
+      'Restore',
+      '',
+      'Show Volumes'
+    ]);
 
     const routes = locationRoutes();
     routes.sources = [
@@ -2242,7 +2334,7 @@ describe('location trash sections', () => {
 
     const dialogs = (showDialog as jest.Mock).mock.calls.map(call => call[0]);
     expect(dialogs.map(dialog => dialog.title)).toEqual([
-      'Clean All Sources',
+      'Empty All Bins',
       'Clean Workspace'
     ]);
     for (const dialog of dialogs) {
@@ -2612,7 +2704,7 @@ describe('Show Volumes and the merged list', () => {
     expect(rowNames(widget)).toEqual(['three.txt', 'd']);
   });
 
-  it('removes every source row once Clean All Sources answers with no errors, before the sources list again', async () => {
+  it('removes every source row once Empty All Bins answers with no errors, before the sources list again', async () => {
     const routes = mergedRoutes();
     routes.empty = {
       success: true,
@@ -2715,7 +2807,7 @@ describe('Show Volumes and the merged list', () => {
       expect(commands.isVisible('trash:restore')).toBe(true);
       expect(
         (widget as any)._contextMenu.items.map((item: any) => item.command)
-      ).toEqual(['trash:restore', 'trash:delete']);
+      ).toEqual(['trash:restore', 'trash:delete', '', 'trash:show-volumes']);
 
       const routes = sourcedRoutes();
       routes[`list?source=${encodeURIComponent(id)}`] = listOf([]);
@@ -2733,6 +2825,256 @@ describe('Show Volumes and the merged list', () => {
       expect(showErrorMessage).not.toHaveBeenCalled();
     }
   );
+});
+
+// ACC-SCOPE-100-MENU-EVERYWHERE: every right-click in the panel offers Show Volumes
+describe('Show Volumes in every right-click', () => {
+  /** Right-click an element and return the event, to read defaultPrevented. */
+  function rightClick(element: HTMLElement): MouseEvent {
+    const event = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true
+    });
+    element.dispatchEvent(event);
+    return event;
+  }
+
+  const menuOpen = (widget: TrashWidget, menu: string) =>
+    jest
+      .spyOn((widget as any)[menu], 'open')
+      .mockImplementation(() => undefined);
+
+  it.each([
+    ['the summary bar', '.jp-TrashPanel-summary'],
+    ['the main list empty space', '.jp-TrashPanel-list'],
+    ['the empty line', '.jp-TrashPanel-empty'],
+    ['the breadcrumb', '.jp-TrashPanel-breadcrumb'],
+    ['a section band', '.jp-TrashPanel-sectionBand'],
+    ['a section fold toggle', '.jp-TrashPanel-sectionHeader'],
+    [
+      'a section trash button',
+      '.jp-TrashPanel-section .jp-TrashPanel-sectionEmpty'
+    ]
+  ])(
+    'opens the Show Volumes menu on %s and stops the browser menu',
+    async (_, selector) => {
+      showVolumesOn();
+      const widget = await open(sourcedRoutes());
+      const opened = menuOpen(widget, '_headerMenu');
+
+      const event = rightClick(find(widget, selector));
+      expect(opened).toHaveBeenCalledTimes(1);
+      expect(event.defaultPrevented).toBe(true);
+      const items = (widget as any)._headerMenu.items;
+      expect(items.map((item: any) => item.label)).toEqual(['Show Volumes']);
+      expect(items[0].isToggled).toBe(true);
+    }
+  );
+
+  it('ends the section row menu with a separator and Show Volumes after Restore', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    const opened = menuOpen(widget, '_sectionMenu');
+    const header = menuOpen(widget, '_headerMenu');
+
+    const event = rightClick(sectionRows(widget, 'cache')[0]);
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(header).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+    const items = (widget as any)._sectionMenu.items;
+    expect(items.map((item: any) => item.type)).toEqual([
+      'command',
+      'separator',
+      'command'
+    ]);
+    expect(items.map((item: any) => item.command)).toEqual([
+      'trash:restore-from-source',
+      '',
+      'trash:show-volumes'
+    ]);
+  });
+
+  it('ends the main row menu with a separator and Show Volumes after Restore and Delete', async () => {
+    const widget = await open(sourcedRoutes());
+    const opened = menuOpen(widget, '_contextMenu');
+    const header = menuOpen(widget, '_headerMenu');
+
+    const event = rightClick(rows(widget)[0]);
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(header).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+    const items = (widget as any)._contextMenu.items;
+    expect(items.map((item: any) => item.type)).toEqual([
+      'command',
+      'command',
+      'separator',
+      'command'
+    ]);
+    expect(items.map((item: any) => item.command)).toEqual([
+      'trash:restore',
+      'trash:delete',
+      '',
+      'trash:show-volumes'
+    ]);
+  });
+
+  it('turns the sections off when run from the menu of a section band', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    expect(sections(widget)).toHaveLength(2);
+    const opened = menuOpen(widget, '_headerMenu');
+
+    rightClick(find(widget, '.jp-TrashPanel-sectionBand'));
+    expect(opened).toHaveBeenCalledTimes(1);
+    const entry = (widget as any)._headerMenu.items[0];
+    await (widget as any)._commands.execute(entry.command, entry.args);
+    await settle();
+    expect(sections(widget)).toHaveLength(0);
+    expect(widget.showVolumes).toBe(false);
+  });
+
+  // ACC-SCOPE-100-MENU-EVERYWHERE: the focus the menu takes comes back to the panel
+  describe('focus after the menu', () => {
+    /** Right-click an element and let the opened menu take the focus. */
+    function openMenuOn(element: HTMLElement): void {
+      rightClick(element);
+      MessageLoop.flush();
+    }
+
+    /** Run the menu item at an index, as Enter on it does. */
+    function choose(menu: any, index: number): void {
+      menu.activeIndex = index;
+      menu.triggerActiveItem();
+    }
+
+    it('Show Volumes off from the menu of a focused fold toggle focuses the main list', async () => {
+      showVolumesOn();
+      const widget = await openAttached(sourcedRoutes());
+      const band = sectionHeader(widget, 'cache');
+      band.focus();
+      openMenuOn(band);
+      expect(document.activeElement).not.toBe(band);
+
+      choose((widget as any)._headerMenu, 0);
+      expect(sections(widget)).toHaveLength(0);
+      expect(document.activeElement).toBe(listBox(widget));
+    });
+
+    it('Escape from the menu of a focused fold toggle focuses the fold toggle', async () => {
+      showVolumesOn();
+      const widget = await openAttached(sourcedRoutes());
+      const band = sectionHeader(widget, 'cache');
+      band.focus();
+      openMenuOn(band);
+      const menu = (widget as any)._headerMenu;
+      expect(document.activeElement).not.toBe(band);
+
+      press(menu.node, 'Escape', { keyCode: 27 });
+      expect(menu.isAttached).toBe(false);
+      expect(document.activeElement).toBe(band);
+    });
+
+    it('Show Volumes from the Shift+F10 menu of a section row focuses the main list', async () => {
+      showVolumesOn();
+      const widget = await openAttached(sourcedRoutes());
+      const row = sectionRows(widget, 'cache')[0];
+      row.focus();
+      press(row, 'F10', { shiftKey: true });
+      MessageLoop.flush();
+      const menu = (widget as any)._sectionMenu;
+      expect(menu.isAttached).toBe(true);
+      expect(document.activeElement).not.toBe(row);
+
+      choose(menu, 2);
+      expect(sections(widget)).toHaveLength(0);
+      expect(document.activeElement).toBe(listBox(widget));
+    });
+
+    it('Escape from a mouse-opened main row menu focuses the main list and keeps its selection and active row', async () => {
+      const widget = await openAttached({
+        list: listOf([file('a.txt'), file('b.txt'), file('c.txt')])
+      });
+      openMenuOn(rows(widget)[rowNames(widget).indexOf('b.txt')]);
+      const menu = (widget as any)._contextMenu;
+      expect(menu.isAttached).toBe(true);
+      const list = listBox(widget);
+      expect(document.activeElement).not.toBe(list);
+      const selected = selectedNames(widget);
+      const active = activeName(widget);
+
+      press(menu.node, 'Escape', { keyCode: 27 });
+      expect(menu.isAttached).toBe(false);
+      expect(document.activeElement).toBe(list);
+      expect(selectedNames(widget)).toEqual(selected);
+      expect(activeName(widget)).toBe(active);
+      expect(active).toBe('b.txt');
+    });
+
+    it('Escape from a mouse-opened section row menu focuses that row', async () => {
+      showVolumesOn();
+      const widget = await openAttached(sourcedRoutes());
+      const row = sectionRows(widget, 'cache')[0];
+      openMenuOn(row);
+      const menu = (widget as any)._sectionMenu;
+      expect(menu.isAttached).toBe(true);
+      expect(document.activeElement).not.toBe(row);
+
+      press(menu.node, 'Escape', { keyCode: 27 });
+      expect(menu.isAttached).toBe(false);
+      expect(document.activeElement).toBe(row);
+    });
+
+    it('Show Volumes off from a mouse-opened section row menu focuses the main list', async () => {
+      showVolumesOn();
+      const widget = await openAttached(sourcedRoutes());
+      openMenuOn(sectionRows(widget, 'cache')[0]);
+      const menu = (widget as any)._sectionMenu;
+      expect(menu.isAttached).toBe(true);
+
+      choose(menu, 2);
+      expect(sections(widget)).toHaveLength(0);
+      expect(document.activeElement).toBe(listBox(widget));
+    });
+
+    it('Delete from a mouse-opened main row menu leaves the focus in the panel', async () => {
+      const routes: Record<string, Route> = {
+        list: listOf([file('a.txt'), file('b.txt')]),
+        delete: { success: true }
+      };
+      const widget = await openAttached(routes);
+      (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+      openMenuOn(rows(widget)[rowNames(widget).indexOf('a.txt')]);
+      const menu = (widget as any)._contextMenu;
+      expect(menu.isAttached).toBe(true);
+
+      serve({ ...routes, list: listOf([file('b.txt')]) });
+      choose(menu, 1);
+      await settle();
+      expect(rowNames(widget)).toEqual(['b.txt']);
+      expect(widget.node.contains(document.activeElement)).toBe(true);
+    });
+
+    it('a toggle leaves a focus outside the panel where it was', async () => {
+      showVolumesOn();
+      const widget = await openAttached(sourcedRoutes());
+      const outside = document.createElement('input');
+      document.body.appendChild(outside);
+      outside.focus();
+
+      widget.toggleShowVolumes();
+      expect(sections(widget)).toHaveLength(0);
+      expect(document.activeElement).toBe(outside);
+      outside.remove();
+    });
+  });
+
+  // ACC-SCOPE-101-EMPTY-BINS
+  it('names the clean of every source Empty All Bins', async () => {
+    const widget = await open(sourcedRoutes());
+    expect((widget as any)._commands.label('trash:clean-all')).toBe(
+      'Empty All Bins'
+    );
+  });
 });
 
 describe('trash buttons', () => {
@@ -2794,7 +3136,7 @@ describe('trash buttons', () => {
       await settle();
 
       const dialog = (showDialog as jest.Mock).mock.calls[0][0];
-      expect(dialog.title).toBe('Clean All Sources');
+      expect(dialog.title).toBe('Empty All Bins');
       expect(dialog.body).toContain('Trash (0 items, 0 B)');
       expect(dialog.body).toContain('/mnt/data (2 items, 3 KB)');
       expect(emptyCalls()).toHaveLength(1);
@@ -2985,6 +3327,53 @@ describe('trash buttons', () => {
     // The button hands the focus to the main list; the emptied list hides and
     // hands it on to the refresh button, never to the page body
     expect(document.activeElement).toBe(refreshButton(widget));
+  });
+
+  // ACC-SCOPE-98-TOP-NAME: with Show Volumes on the summary bar names the XDG trash
+  const XDG_LABEL = '~/.local/share/Trash';
+  const summaryText = (widget: TrashWidget) =>
+    find(widget, '.jp-TrashPanel-summaryText');
+
+  function labelledRoutes(): Record<string, Route> {
+    const routes = bandRoutes();
+    routes.sources = (routes.sources as ISource[]).map(source =>
+      source.id === 'xdg' ? { ...source, label: XDG_LABEL } : source
+    );
+    return routes;
+  }
+
+  it('with Show Volumes on, the summary text starts with the XDG label, which its tooltip holds and the ellipsis shortens', async () => {
+    showVolumesOn();
+    const widget = await open(labelledRoutes());
+    const text = summaryText(widget);
+    expect(text.textContent).toBe(`${XDG_LABEL} \u00B7 1 item \u00B7 5 B`);
+    // The band's one-line parts: the label shortens, the count never shrinks
+    expect(text.classList.contains('jp-TrashPanel-sectionLabel')).toBe(true);
+    const label = text.querySelector<HTMLElement>(
+      ':scope > .jp-TrashPanel-sectionText'
+    )!;
+    expect(label.textContent).toBe(XDG_LABEL);
+    expect(label.title).toBe(XDG_LABEL);
+    expect(
+      text.querySelector(':scope > .jp-TrashPanel-sectionCount')!.textContent
+    ).toBe(' \u00B7 1 item \u00B7 5 B');
+  });
+
+  it('with Show Volumes off, the summary text is the count and size only, and turning it off drops the label', async () => {
+    const off = await open(labelledRoutes());
+    expect(summaryText(off).textContent).toBe('5 items \u00B7 0 B');
+    expect(summaryText(off).children).toHaveLength(0);
+
+    showVolumesOn();
+    const widget = await open(labelledRoutes());
+    const text = summaryText(widget);
+    expect(text.textContent!.startsWith(XDG_LABEL)).toBe(true);
+    serve(labelledRoutes());
+    await (widget as any)._commands.execute('trash:show-volumes');
+    await settle();
+    expect(text.textContent).toBe('5 items \u00B7 0 B');
+    expect(text.children).toHaveLength(0);
+    expect(text.classList.contains('jp-TrashPanel-sectionLabel')).toBe(false);
   });
 
   it('keeps the focus in the panel after a keyboard empty from the header button', async () => {

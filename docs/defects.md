@@ -229,6 +229,53 @@ Lumino widget in `src/widget.ts`
   - log: 2026-11-15T20:46:25Z @kj edited test-tags added "UNIT, FUNCTIONAL"
   - log: 2026-11-15T20:46:26Z @kj keyboard focus with no active row makes the first row active, on focus and when the active row leaves the listing (r5-fix-4, r6-fix-1); review round 7 clean
   - log: 2026-11-15T20:46:32Z @kj closed
+- [x] `DEF-PANEL-35-BAND-BOX` **Trash button hover box too large for its icon** - MINOR; the band trash button's red hover box fills the whole 21px band height and 24px width with square corners around a 14px icon; the summary bar trash button stretches to the full bar height
+  - evidence: band and summary bar button box 18x18 with 2px corners inside the band; Galata :1067, :1030; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - attachment: defects/DEF-PANEL-35-BAND-BOX.png sha256:cc1abb8f7bb234bc edited:2026-11-16T12:23:14Z
+  - related: ACC-SCOPE-97-BUTTON-BOX
+  - repro: Show Volumes on, hover a section band's trash button
+  - test-tags: FUNCTIONAL
+  - root-cause: 2026-11-16T12:22:37Z @kj .jp-TrashPanel-sectionEmpty in style/base.css: width 24px, no height, so it stretches to the band; border-radius 0; the summary bar copy adds align-self: stretch and negative margins
+  - log: 2026-11-16T12:22:37Z @kj added
+  - log: 2026-11-16T12:23:03Z @kj attached ../../../../../../../tmp/paste-files/paste-20261116-131801.png sha256:cc1abb8f7bb234bc
+  - log: 2026-11-16T12:23:19Z @kj attached defects/DEF-PANEL-35-BAND-BOX.png sha256:cc1abb8f7bb234bc
+  - log: 2026-11-16T16:37:05Z @kj closed
+- [x] `DEF-PANEL-36-TOP-NAME` **Top section does not name its trash** - MEDIUM; with Show Volumes on, the main list's summary bar shows only the count and size; nothing names it the XDG trash ~/.local/share/Trash, so the target of its trash button is unclear
+  - evidence: summary bar starts with the XDG trash label with Show Volumes on; jest summary cases, Galata :1067; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - attachment: defects/DEF-PANEL-36-TOP-NAME.png sha256:e8d71732df3f6909 edited:2026-11-16T12:23:14Z
+  - related: ACC-SCOPE-98-TOP-NAME
+  - repro: Show Volumes on, read the summary bar above the main list
+  - test-tags: UNIT, FUNCTIONAL
+  - root-cause: 2026-11-16T12:22:37Z @kj src/widget.ts writes only count and size into the summary text; routes.py source_candidates labels the XDG trash 'Trash'
+  - log: 2026-11-16T12:22:37Z @kj added
+  - log: 2026-11-16T12:23:19Z @kj attached defects/DEF-PANEL-36-TOP-NAME.png sha256:e8d71732df3f6909
+  - log: 2026-11-16T16:37:05Z @kj closed
+- [x] `DEF-PANEL-37-HOME-PATH` **Labels show the full home path** - MINOR; a location under the home folder shows /home/lab/workspace instead of ~/workspace; in a narrow band the label truncates to /HOME/LAB/WORKSPA...
+  - evidence: source_label replaces the home folder with ~, label field only; pytest TestSourceLabels 6 cases; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - related: ACC-SCOPE-99-HOME-TILDE
+  - repro: Show Volumes on, notebook root /home/lab/workspace, read its section band
+  - test-tags: UNIT
+  - root-cause: 2026-11-16T12:22:37Z @kj routes.py source_candidates sets label to str(top) and /home/<name>; no label replaces the home folder with ~
+  - log: 2026-11-16T12:22:37Z @kj added
+  - log: 2026-11-16T16:37:05Z @kj closed
+- [x] `DEF-PANEL-38-MENU-BODY` **Show Volumes only on the header right-click** - MEDIUM; a right-click on the main list's empty space, the summary bar or a section band opens the browser menu; row menus hold only Restore and Delete; Show Volumes is reached only from the header or the palette
+  - evidence: panel-wide contextmenu listener opens Show Volumes; row menus end with separator and Show Volumes; jest 7 targets, Galata :799; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - attachment: defects/DEF-PANEL-36-TOP-NAME.png sha256:e8d71732df3f6909 edited:2026-11-16T12:23:14Z
+  - related: ACC-SCOPE-100-MENU-EVERYWHERE
+  - repro: right-click below the last row of the main list
+  - test-tags: UNIT, FUNCTIONAL
+  - root-cause: 2026-11-16T12:22:37Z @kj src/widget.ts: only the header has a contextmenu listener, opening _headerMenu; _contextMenu and _sectionMenu hold Restore and Delete only
+  - log: 2026-11-16T12:22:37Z @kj added
+  - log: 2026-11-16T12:23:19Z @kj attached defects/DEF-PANEL-36-TOP-NAME.png sha256:e8d71732df3f6909
+  - log: 2026-11-16T16:37:05Z @kj closed
+- [x] `DEF-PANEL-39-LIST-JUMP` **List jumps to the top after a Delete** - MEDIUM; after Delete or Restore of a row in a scrolled main list, confirmed with Enter, the list scrolls to the top and row 0 becomes active; the user loses their place; keyboard Delete since 1.1.27, mouse-opened menus since the one focus rule
+  - evidence: _reloadChanged makes the neighbour row active before the redraw, so no scroll to row 0; jest 6 neighbour cases, Galata :1197 Enter-confirmed Delete keeps scroll; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
+  - related: ACC-KEYS-102-NEIGHBOUR-ROW
+  - repro: scroll a long main list, right-click a row, Delete Permanently, press Enter in the dialog
+  - test-tags: UNIT, FUNCTIONAL
+  - root-cause: 2026-11-16T16:06:53Z @kj the dialog returns focus to the list; _reloadChanged drops the removed active row, _activePath becomes null and _restoreActiveRow runs _setActiveIndex(0) with scrollIntoView while the list is :focus-visible
+  - log: 2026-11-16T16:06:53Z @kj added
+  - log: 2026-11-16T16:37:05Z @kj closed
 
 ## Test suite `TEST`
 

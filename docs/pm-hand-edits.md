@@ -1,1 +1,2 @@
 - 2026-10-13T23:27:33Z @kj defects.md d45dcf19 sha256:41bc89a3d7bd98406ed7abfc9fb772246bcc04d18f47042693b94f25fd920bb1: evidence line of DEF-TEST-4 reads `40 requests cases`; pm-tools has no command that rewrites an evidence line; corrected to `40 request cases`
+- 2026-11-16T12:23:14Z @kj defects.md 6fa3a04f sha256:6712f2704a01875061267c7ad267bfd89901f76860b993e17b3b383640bfefed: remove the attachment line that pointed into /tmp; the screenshot is attached again from docs/defects/

@@ -20,10 +20,11 @@ A dedicated left panel for managing your JupyterLab trash. See what's taking up 
 - **Trash panel in sidebar** - Accessible alongside file browser, kernels, git, and extensions panels
 - **Storage usage display** - See how much space deleted files occupy
 - **Every trash in one list** - The main list shows the items of the XDG trash, `/home/cache`, every user's home trash and every location trash together; each row restores and deletes in its own trash
-- **Show Volumes** - Right-click the panel header, or use the command palette, to show each trash as a collapsible section with its own item count, size and a trash button that empties only that trash; off by default and remembered in the browser
+- **Show Volumes** - Right-click anywhere in the panel, or use the command palette, to show each trash as a collapsible section with its own item count, size and a trash button that empties only that trash; the top section names the home trash; off by default and remembered in the browser
+- **Short labels** - A trash under the home folder is labelled with `~`, as `~/workspace`
 - **Trash on other file systems** - The trash folder of the notebook root and of every folder in `c.TrashManagement.locations` is one of the trashes (see [Configuration](#configuration))
 - **Mount-safe delete** - Deleting or emptying a trashed folder stops at a file system mounted inside it; that entry stays in the trash with an error naming the mount
-- **Range of the clean** - two commands in the command palette: Clean All Sources empties every source; Clean Workspace removes only entries whose original path lies under the workspace
+- **Range of the clean** - two commands in the command palette: Empty All Bins empties every source; Clean Workspace removes only entries whose original path lies under the workspace
 - **Individual item management** - Remove or restore specific files from trash
 - **Folder navigation** - Open a trashed folder and restore or remove single items inside it
 - **Keyboard control** - Tab to the list, move with the arrow keys, select with Space, open a folder with Enter and reach Restore and Delete with Shift+F10

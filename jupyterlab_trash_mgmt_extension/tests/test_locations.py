@@ -11,6 +11,7 @@ from jupyterlab_trash_mgmt_extension import TrashManagement, routes
 from jupyterlab_trash_mgmt_extension.routes import (
     collect_source_listing,
     collect_sources,
+    empty_trash,
     existing_sources,
     resolve_locations,
 )
@@ -100,9 +101,9 @@ class TestConfiguredOption:
         listing = await fetch_json(jp_fetch, "list")
 
         assert [(s["id"], s["label"], s["item_count"]) for s in sources] == [
-            ("xdg", "Trash", 1),
+            ("xdg", str(trash_dir), 1),
             (source_id(root_trash), jp_serverapp.root_dir, 0),
-            (source_id(cache_trash), str(cache), 1),
+            (source_id(cache_trash), "~/.cache", 1),
         ]
         assert [item["original_path"] for item in listing["items"]] == ["/home/user/x.txt"]
 
@@ -176,11 +177,77 @@ class TestLocationSources:
         sources = collect_sources([str(first), str(second)])
 
         assert [(s["id"], s["label"]) for s in sources] == [
-            ("xdg", "Trash"),
+            ("xdg", str(trash_dir)),
             (source_id(first_trash), str(first)),
             (source_id(second_trash), str(second)),
         ]
         assert (sources[1]["item_count"], sources[1]["total_size"]) == (1, "5 B")
+
+
+class TestSourceLabels:
+    """A label shows the server user's home folder (HOME, here tmp_path/home) as '~'."""
+
+    @pytest.fixture
+    def labelled(self, tmp_path):
+        """The XDG trash under HOME, the cache and two locations, one under HOME."""
+        home = tmp_path / "home"
+        make_trash(home / ".local" / "share" / "Trash")
+        cache = make_trash(tmp_path / "homes" / "cache")
+        inside = home / "nas"
+        outside = tmp_path / "nas"
+        inside_trash = dash_trash(inside)
+        outside_trash = dash_trash(outside)
+        expected = [
+            ("xdg", "~/.local/share/Trash"),
+            ("cache", str(cache)),
+            (source_id(inside_trash), "~/nas"),
+            (source_id(outside_trash), str(outside)),
+        ]
+        return [str(inside), str(outside)], expected
+
+    def test_sources_under_home_take_the_tilde_and_others_stay_absolute(self, labelled):
+        locations, expected = labelled
+        sources = existing_sources(locations)
+        assert [(s["id"], s["label"]) for s in sources] == expected
+        # Only the label changes: the paths the server compares stay absolute
+        assert [s["location"] for s in sources[2:]] == locations
+        assert all(s["path"].is_absolute() and s["root"].is_absolute() for s in sources)
+
+    def test_a_home_equal_to_home_is_labelled_tilde(self, tmp_path, monkeypatch):
+        homes = tmp_path / "homes"
+        (homes / "alice").mkdir(parents=True)
+        (homes / "bob").mkdir()
+        monkeypatch.setenv("HOME", str(homes / "alice"))
+        labels = {c["id"]: c["label"] for c in routes.source_candidates()}
+        assert (labels["home:alice"], labels["home:bob"]) == ("~", str(homes / "bob"))
+
+    @staticmethod
+    def location_labels(locations) -> list[str]:
+        candidates = routes.source_candidates(locations)
+        return [c["label"] for c in candidates if c["id"].startswith("location:")]
+
+    def test_a_symlinked_home_labels_both_spellings_with_the_tilde(self, tmp_path, monkeypatch):
+        real = tmp_path / "real-home"
+        real.mkdir()
+        link = tmp_path / "link-home"
+        link.symlink_to(real)
+        monkeypatch.setenv("HOME", str(link))
+        locations = [str(real / "workspace"), str(link / "projects"), str(tmp_path / "nas")]
+        assert self.location_labels(locations) == ["~/workspace", "~/projects", str(tmp_path / "nas")]
+
+    def test_a_symlink_inside_home_to_another_folder_keeps_its_home_spelling(self, tmp_path):
+        target = tmp_path / "mnt" / "nas"
+        target.mkdir(parents=True)
+        nas = tmp_path / "home" / "nas"
+        nas.symlink_to(target)
+        assert self.location_labels([str(nas)]) == ["~/nas"]
+
+    @pytest.mark.parametrize("scope", ["all", "workspace"])
+    def test_empty_and_clean_responses_carry_the_labels(self, labelled, tmp_path, scope):
+        locations, expected = labelled
+        status, body = empty_trash(scope, str(tmp_path / "workspace"), locations)
+        assert status is None
+        assert [(s["id"], s["label"]) for s in body["sources"]] == expected
 
 
 class TestRelativePath:

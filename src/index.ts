@@ -82,9 +82,9 @@ const plugin: JupyterFrontEndPlugin<void> = {
       }
     });
 
-    // Register clean all sources command
+    // Register empty all bins command
     commands.addCommand(CommandIDs.cleanAll, {
-      label: trans.__('Clean All Sources'),
+      label: trans.__('Empty All Bins'),
       caption: trans.__('Permanently delete every item in every trash source'),
       describedBy: { args: { type: 'object', properties: {} } },
       execute: () => {
