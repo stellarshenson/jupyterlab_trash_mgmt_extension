@@ -34,6 +34,20 @@ jest.mock('../icon', () => {
   };
 });
 
+// The filter glyphs come from ui-components; its root index pulls in the
+// React form components, whose ESM dependencies jest does not transform.
+jest.mock('@jupyterlab/ui-components', () => {
+  const icon = (name: string) => ({
+    element: ({ container }: { container: HTMLElement }) => {
+      const svg = document.createElement('svg');
+      svg.dataset.icon = name;
+      container.appendChild(svg);
+      return container;
+    }
+  });
+  return { closeIcon: icon('close'), filterIcon: icon('filter') };
+});
+
 const request = requestAPI as jest.Mock;
 const settings = {} as ServerConnection.ISettings;
 
@@ -245,6 +259,7 @@ interface ISource {
   label: string;
   item_count: number;
   total_size: string;
+  total_bytes: number;
   error: string;
 }
 
@@ -263,7 +278,14 @@ function sourceOf(
         : id.startsWith('location:')
           ? id.slice('location:'.length).replace(/\/\.Trash-\d+$/, '')
           : `/home/${id.slice('home:'.length)}`;
-  return { id, label, item_count: itemCount, total_size: totalSize, error };
+  return {
+    id,
+    label,
+    item_count: itemCount,
+    total_size: totalSize,
+    total_bytes: 0,
+    error
+  };
 }
 
 /** The xdg trash plus two extra sources, each with its own listing. */
@@ -344,11 +366,14 @@ describe('header', () => {
       emptyButton(widget)
     );
     expect(emptyButton(widget).hidden).toBe(false);
+    expect(emptyButton(widget).disabled).toBe(false);
   });
 
-  it('hides Empty Trash while the trash holds no item', async () => {
+  it('disables Empty Trash while the trash holds no item, keeping it and its tooltip', async () => {
     const widget = await open({ list: listOf([]) });
-    expect(emptyButton(widget).hidden).toBe(true);
+    expect(emptyButton(widget).hidden).toBe(false);
+    expect(emptyButton(widget).disabled).toBe(true);
+    expect(emptyButton(widget).title).toBe('Empty Trash');
   });
 
   it('keeps Empty Trash inside an empty folder', async () => {
@@ -358,7 +383,7 @@ describe('header', () => {
     });
     doubleClick(rows(widget)[0]);
     await settle();
-    expect(emptyButton(widget).hidden).toBe(false);
+    expect(emptyButton(widget).disabled).toBe(false);
   });
 
   it('keeps the same buttons across loads', async () => {
@@ -367,6 +392,143 @@ describe('header', () => {
     void widget.refresh();
     await settle();
     expect(refreshButton(widget)).toBe(before);
+  });
+});
+
+describe('filter', () => {
+  const filterButton = (widget: TrashWidget) =>
+    find<HTMLButtonElement>(widget, 'button[title="Filter trash"]');
+
+  const filterWrap = (widget: TrashWidget) =>
+    find<HTMLDivElement>(widget, '.jp-TrashPanel-filterWrap');
+
+  const filterInput = (widget: TrashWidget) =>
+    find<HTMLInputElement>(widget, '.jp-TrashPanel-filterInput');
+
+  const filterClear = (widget: TrashWidget) =>
+    find<HTMLButtonElement>(widget, '.jp-TrashPanel-filterClear');
+
+  /** Set the field's text and fire the event a keystroke fires. */
+  function type(widget: TrashWidget, text: string): void {
+    const input = filterInput(widget);
+    input.value = text;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  it('narrows the rows to the name match, ignoring case, and clearing restores every row', async () => {
+    const widget = await open({
+      list: listOf([file('alpha.txt'), file('beta.txt'), folder('folder-a')])
+    });
+    expect(filterWrap(widget).hidden).toBe(true);
+    click(filterButton(widget));
+    expect(filterWrap(widget).hidden).toBe(false);
+    expect(filterButton(widget).getAttribute('aria-pressed')).toBe('true');
+    expect(filterClear(widget).hidden).toBe(true);
+
+    type(widget, 'ALP');
+    expect(rowNames(widget)).toEqual(['alpha.txt']);
+    expect(filterClear(widget).hidden).toBe(false);
+
+    click(filterClear(widget));
+    expect(rowNames(widget)).toEqual(['alpha.txt', 'beta.txt', 'folder-a']);
+    expect(filterClear(widget).hidden).toBe(true);
+    expect(filterInput(widget).value).toBe('');
+  });
+
+  it('drops a selected row the query hides, so Restore leaves it alone', async () => {
+    const widget = await open({
+      list: listOf([file('alpha.txt'), file('beta.txt')]),
+      restore: { success: true }
+    });
+    click(rows(widget)[0]);
+    click(rows(widget)[1], { ctrlKey: true });
+    click(filterButton(widget));
+    type(widget, 'alp');
+
+    expect((widget as any)._commands.label('trash:restore')).toBe('Restore');
+
+    void (widget as any)._commands.execute('trash:restore');
+    await settle();
+
+    const bodies = request.mock.calls
+      .filter(call => call[0] === 'restore')
+      .map(call => JSON.parse(call[2].body).trash_path);
+    expect(bodies).toEqual(['alpha.txt']);
+  });
+
+  it('matches the original path as well as the name', async () => {
+    const widget = await open({
+      list: listOf([file('alpha.txt'), file('notes.txt', 'docs')])
+    });
+    click(filterButton(widget));
+    type(widget, 'docs');
+    expect(rowNames(widget)).toEqual(['notes.txt']);
+  });
+
+  it('leaves no rows when nothing matches, and does not claim the trash is empty', async () => {
+    const widget = await open({
+      list: listOf([file('alpha.txt'), file('beta.txt')])
+    });
+    click(filterButton(widget));
+    type(widget, 'zzz');
+    expect(rowNames(widget)).toEqual([]);
+    // The line follows the unfiltered count, so it stays hidden here
+    expect(find(widget, '.jp-TrashPanel-empty').style.display).toBe('none');
+    expect(summary(widget).textContent).toBe('2 items · 0 B');
+  });
+
+  it('hiding the box clears the query and restores every row', async () => {
+    const widget = await open({
+      list: listOf([file('alpha.txt'), file('beta.txt'), folder('folder-a')])
+    });
+    click(filterButton(widget));
+    type(widget, 'alp');
+    expect(rowNames(widget)).toEqual(['alpha.txt']);
+
+    click(filterButton(widget));
+    expect(filterWrap(widget).hidden).toBe(true);
+    expect(filterButton(widget).getAttribute('aria-pressed')).toBe('false');
+    expect(filterInput(widget).value).toBe('');
+    expect(rowNames(widget)).toEqual(['alpha.txt', 'beta.txt', 'folder-a']);
+  });
+
+  it('hands the focus to the filter button when the box is hidden', async () => {
+    const widget = await openAttached({
+      list: listOf([file('alpha.txt')])
+    });
+    click(filterButton(widget));
+    expect(document.activeElement).toBe(filterInput(widget));
+
+    click(filterButton(widget));
+    expect(filterWrap(widget).hidden).toBe(true);
+    expect(document.activeElement).toBe(filterButton(widget));
+  });
+
+  it('keeps the caret in the field while every keystroke re-renders the list', async () => {
+    const widget = await openAttached({
+      list: listOf([file('alpha.txt'), file('beta.txt')])
+    });
+    click(filterButton(widget));
+    expect(document.activeElement).toBe(filterInput(widget));
+    type(widget, 'alp');
+    expect(document.activeElement).toBe(filterInput(widget));
+    expect(rowNames(widget)).toEqual(['alpha.txt']);
+  });
+
+  it('narrows every section band too', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    click(filterButton(widget));
+    type(widget, 'alice');
+    // Only alice.txt carries the text; one.txt and cache.bin do not
+    expect(rowNames(widget)).toEqual([]);
+    expect(sectionRows(widget, 'cache')).toHaveLength(0);
+    expect(sectionRows(widget, 'home:alice')).toHaveLength(1);
+
+    type(widget, '');
+    expect(rowNames(widget)).toEqual(['one.txt']);
+    expect(sectionRows(widget, 'cache')).toHaveLength(1);
+    expect(sectionRows(widget, 'home:alice')).toHaveLength(1);
   });
 });
 
@@ -1774,19 +1936,25 @@ describe('Empty Trash', () => {
 describe('trash sources', () => {
   beforeEach(showVolumesOn);
 
-  it('renders the returned sources in order below the main list, absent ones omitted', async () => {
+  it('renders the returned sources in order, the home band above the main list and the others below it, absent ones omitted', async () => {
     const widget = await open(sourcedRoutes());
 
-    // The xdg trash stays the main listing
+    // The xdg trash stays the main listing; its band holds no rows of its own
     expect(rowNames(widget)).toEqual(['one.txt']);
-    expect(widget.node.querySelector('[data-source="xdg"]')).toBeNull();
+    expect(
+      sectionOf(widget, 'xdg').querySelector('.jp-TrashPanel-sectionRow')
+    ).toBeNull();
 
-    // A section per extra source, in the order the server returned them
+    // A section per source, in the order the server returned them
     expect(sections(widget).map(element => element.dataset.source)).toEqual([
+      'xdg',
       'cache',
       'home:alice'
     ]);
     expect(listBox(widget).compareDocumentPosition(sections(widget)[0])).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING
+    );
+    expect(listBox(widget).compareDocumentPosition(sections(widget)[1])).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
     );
 
@@ -2106,6 +2274,7 @@ describe('location trash sections', () => {
     const widget = await open(locationRoutes());
 
     expect(sections(widget).map(element => element.dataset.source)).toEqual([
+      'xdg',
       'cache',
       'home:alice',
       LOCATION
@@ -2127,7 +2296,7 @@ describe('location trash sections', () => {
     expect(menu.items.map((item: any) => item.label)).toEqual([
       'Restore',
       '',
-      'Show Volumes'
+      'Hide Volumes'
     ]);
 
     const routes = locationRoutes();
@@ -2409,6 +2578,7 @@ describe('Show Volumes and the merged list', () => {
     await (widget as any)._commands.execute('trash:show-volumes');
     await settle();
     expect(sections(widget).map(element => element.dataset.source)).toEqual([
+      'xdg',
       'cache',
       'home:alice'
     ]);
@@ -2417,14 +2587,39 @@ describe('Show Volumes and the merged list', () => {
     expect(window.localStorage.getItem(SHOW_VOLUMES_KEY)).toBe('true');
 
     const again = await open(sourcedRoutes());
-    expect(sections(again)).toHaveLength(2);
-    expect(headerMenu(again).items[0].isToggled).toBe(true);
+    expect(sections(again)).toHaveLength(3);
+    expect(headerMenu(again).items[0].label).toBe('Hide Volumes');
+    expect(headerMenu(again).items[0].isToggled).toBe(false);
 
     // Running it again removes the sections
     await (again as any)._commands.execute('trash:show-volumes');
     await settle();
     expect(sections(again)).toHaveLength(0);
     expect(window.localStorage.getItem(SHOW_VOLUMES_KEY)).toBe('false');
+  });
+
+  // ACC-SCOPE-103-HIDE-VOLUMES: the entry names what it does, with no check mark
+  it('labels the entry Hide Volumes while the volumes show and Show Volumes while hidden, with no check mark, and notifies each flip', async () => {
+    const widget = await open(sourcedRoutes());
+    const commands = (widget as any)._commands;
+    const changed = jest.fn();
+    commands.commandChanged.connect((_: unknown, args: any) =>
+      changed(args.id)
+    );
+    expect(commands.label('trash:show-volumes')).toBe('Show Volumes');
+    expect(commands.isToggled('trash:show-volumes')).toBe(false);
+
+    await commands.execute('trash:show-volumes');
+    await settle();
+    expect(commands.label('trash:show-volumes')).toBe('Hide Volumes');
+    expect(commands.isToggled('trash:show-volumes')).toBe(false);
+    expect(changed).toHaveBeenCalledWith('trash:show-volumes');
+
+    changed.mockClear();
+    await commands.execute('trash:show-volumes');
+    await settle();
+    expect(commands.label('trash:show-volumes')).toBe('Show Volumes');
+    expect(changed).toHaveBeenCalledWith('trash:show-volumes');
   });
 
   it('merges a location answering later into the sorted main list and sums the summary', async () => {
@@ -2457,8 +2652,24 @@ describe('Show Volumes and the merged list', () => {
     await settle();
     expect(rowNames(widget)).toEqual(['three.txt', 'one.txt']);
     expect(sections(widget).map(element => element.dataset.source)).toEqual([
+      'xdg',
       LOCATION
     ]);
+  });
+
+  it('turning Show Volumes on drops the merged location row at once, before the next list answers', async () => {
+    const routes = mergedRoutes();
+    routes.list = listOf([file('one.txt')]);
+    const widget = await open(routes);
+    expect(rowNames(widget).sort()).toEqual(['d', 'one.txt']);
+
+    const held = deferred<unknown>();
+    serve({ ...routes, list: () => held.promise });
+    await (widget as any)._commands.execute('trash:show-volumes');
+    await settle();
+    expect(rowNames(widget)).toEqual(['one.txt']);
+    held.resolve(routes.list);
+    await settle();
   });
 
   it('gives one name in two sources two rows, each its own identity', async () => {
@@ -2712,7 +2923,7 @@ describe('Show Volumes and the merged list', () => {
       sources: [cleaned('xdg'), cleaned(LOCATION)]
     };
     const widget = await open(routes);
-    expect(emptyButton(widget).hidden).toBe(false);
+    expect(emptyButton(widget).disabled).toBe(false);
     const before = routes[LISTING];
     const { early, fresh } = await holdListings(widget, routes);
     routes.list = listOf([]);
@@ -2725,7 +2936,7 @@ describe('Show Volumes and the merged list', () => {
     expect(veil(widget).hidden).toBe(true);
     expect(rowNames(widget)).toEqual([]);
     expect(summary(widget).textContent).toBe('0 items · 0 B');
-    expect(emptyButton(widget).hidden).toBe(true);
+    expect(emptyButton(widget).disabled).toBe(true);
 
     early.resolve(before);
     await settle();
@@ -2866,8 +3077,8 @@ describe('Show Volumes in every right-click', () => {
       expect(opened).toHaveBeenCalledTimes(1);
       expect(event.defaultPrevented).toBe(true);
       const items = (widget as any)._headerMenu.items;
-      expect(items.map((item: any) => item.label)).toEqual(['Show Volumes']);
-      expect(items[0].isToggled).toBe(true);
+      expect(items.map((item: any) => item.label)).toEqual(['Hide Volumes']);
+      expect(items[0].isToggled).toBe(false);
     }
   );
 
@@ -2921,7 +3132,7 @@ describe('Show Volumes in every right-click', () => {
   it('turns the sections off when run from the menu of a section band', async () => {
     showVolumesOn();
     const widget = await open(sourcedRoutes());
-    expect(sections(widget)).toHaveLength(2);
+    expect(sections(widget)).toHaveLength(3);
     const opened = menuOpen(widget, '_headerMenu');
 
     rightClick(find(widget, '.jp-TrashPanel-sectionBand'));
@@ -2972,6 +3183,41 @@ describe('Show Volumes in every right-click', () => {
       press(menu.node, 'Escape', { keyCode: 27 });
       expect(menu.isAttached).toBe(false);
       expect(document.activeElement).toBe(band);
+    });
+
+    // DEF-PANEL-44-MENU-FOCUS: a disabled button cannot take the focus back
+    it('Escape from the menu of a disabled band trash button focuses that band fold toggle', async () => {
+      showVolumesOn();
+      const routes = sourcedRoutes();
+      routes.sources = [
+        sourceOf('xdg', 1, '5 B'),
+        sourceOf('cache', 0, '0 B'),
+        sourceOf('home:alice', 1, '2 KB')
+      ];
+      routes['list?source=cache'] = listOf([]);
+      const widget = await openAttached(routes);
+      const button = sectionOf(widget, 'cache').querySelector<HTMLElement>(
+        '.jp-TrashPanel-sectionEmpty:disabled'
+      )!;
+      openMenuOn(button);
+      const menu = (widget as any)._headerMenu;
+      expect(menu.isAttached).toBe(true);
+
+      press(menu.node, 'Escape', { keyCode: 27 });
+      expect(menu.isAttached).toBe(false);
+      expect(document.activeElement).toBe(sectionHeader(widget, 'cache'));
+    });
+
+    it('Escape from the menu of the disabled header trash button focuses the refresh button', async () => {
+      const widget = await openAttached({ list: listOf([]) });
+      expect(emptyButton(widget).disabled).toBe(true);
+      openMenuOn(emptyButton(widget));
+      const menu = (widget as any)._headerMenu;
+      expect(menu.isAttached).toBe(true);
+
+      press(menu.node, 'Escape', { keyCode: 27 });
+      expect(menu.isAttached).toBe(false);
+      expect(document.activeElement).toBe(refreshButton(widget));
     });
 
     it('Show Volumes from the Shift+F10 menu of a section row focuses the main list', async () => {
@@ -3125,7 +3371,7 @@ describe('trash buttons', () => {
         showVolumesOn();
       }
       const widget = await open(locationOnlyRoutes());
-      expect(emptyButton(widget).hidden).toBe(false);
+      expect(emptyButton(widget).disabled).toBe(false);
 
       (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
       serve({
@@ -3144,15 +3390,16 @@ describe('trash buttons', () => {
     }
   );
 
-  it('hides the header button once every source holds 0 items', async () => {
+  it('disables the header button once every source holds 0 items', async () => {
     showVolumesOn();
     const widget = await open(locationOnlyRoutes());
-    expect(emptyButton(widget).hidden).toBe(false);
+    expect(emptyButton(widget).disabled).toBe(false);
 
     serve(locationOnlyRoutes(0));
     void widget.refresh();
     await settle();
-    expect(emptyButton(widget).hidden).toBe(true);
+    expect(emptyButton(widget).hidden).toBe(false);
+    expect(emptyButton(widget).disabled).toBe(true);
   });
 
   it('empties one source from its band after a dialog naming it, leaving the fold state and the other sources', async () => {
@@ -3193,7 +3440,7 @@ describe('trash buttons', () => {
     ).toBeGreaterThan(1);
   });
 
-  it('gives the focus to the fold toggle when a keyboard empty hides the band button', async () => {
+  it('gives the focus to the fold toggle when a keyboard empty disables the band button', async () => {
     showVolumesOn();
     const widget = await openAttached(bandRoutes());
     (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
@@ -3210,7 +3457,8 @@ describe('trash buttons', () => {
     press(button, 'Enter');
     click(button);
     await settle();
-    expect(button.hidden).toBe(true);
+    expect(button.hidden).toBe(false);
+    expect(button.disabled).toBe(true);
     expect(document.activeElement).toBe(sectionHeader(widget, LOCATION));
   });
 
@@ -3230,7 +3478,7 @@ describe('trash buttons', () => {
     );
   });
 
-  it('hides the band button of a source holding 0 items', async () => {
+  it('disables the band button of a source holding 0 items and enables it at 1 item', async () => {
     showVolumesOn();
     const routes = bandRoutes();
     routes.sources = [
@@ -3241,16 +3489,60 @@ describe('trash buttons', () => {
     routes['list?source=cache'] = listOf([]);
     const widget = await open(routes);
 
-    expect(bandEmpty(widget, 'cache').hidden).toBe(true);
+    expect(bandEmpty(widget, 'cache').hidden).toBe(false);
+    expect(bandEmpty(widget, 'cache').disabled).toBe(true);
+    expect(bandEmpty(widget, 'cache').title).toBe('Empty Trash in /home/cache');
     expect(bandEmpty(widget, 'home:alice').hidden).toBe(false);
+    expect(bandEmpty(widget, 'home:alice').disabled).toBe(false);
   });
 
-  // ACC-SCOPE-93-HOME-EMPTY: the summary bar button empties the XDG trash alone
-  const summaryEmpty = (widget: TrashWidget) =>
-    find<HTMLButtonElement>(
-      widget,
-      '.jp-TrashPanel-summary .jp-TrashPanel-sectionEmpty'
-    );
+  // DEF-PANEL-43-STALE-COUNT
+  it.each([
+    ['answers', true],
+    ['fails', false]
+  ])(
+    'a delete of the only row of a band that %s sets the band count, its button and the total before /sources answers',
+    async (_, ok) => {
+      showVolumesOn();
+      const routes: Record<string, Route> = {
+        sources: [
+          { ...sourceOf('xdg', 1, '1.0 KB'), total_bytes: 1024 },
+          { ...sourceOf(LOCATION, 2, '3.0 KB'), total_bytes: 3072 }
+        ],
+        list: {
+          ...listOf([{ ...file('a.txt'), size: 1024 }]),
+          total_size: 1024
+        },
+        [LISTING]: listOf([file('b.txt'), file('c.txt')], '3.0 KB'),
+        delete: ok
+          ? { success: true }
+          : () => Promise.reject(new Error('denied'))
+      };
+      const widget = await open(routes);
+      expect(sectionLabel(widget, 'xdg').textContent).toBe(
+        'Trash (1 item, 1.0 KB)'
+      );
+      expect(summary(widget).textContent).toBe('3 items · 4.0 KB');
+
+      const held = deferred<unknown>();
+      serve({ ...routes, sources: () => held.promise });
+      (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+      await (widget as any)._deleteItems([(widget as any)._items[0]]);
+      await settle();
+      expect(sectionLabel(widget, 'xdg').textContent).toBe(
+        ok ? 'Trash (0 items, 0 B)' : 'Trash (1 item, 1.0 KB)'
+      );
+      expect(bandEmpty(widget, 'xdg').disabled).toBe(ok);
+      expect(summary(widget).textContent).toBe(
+        ok ? '2 items · 3.0 KB' : '3 items · 4.0 KB'
+      );
+      held.resolve(routes.sources);
+      await settle();
+    }
+  );
+
+  // ACC-SCOPE-104-VOLUME-BANDS: the home band button empties the XDG trash alone
+  const homeEmpty = (widget: TrashWidget) => bandEmpty(widget, 'xdg');
 
   /** Band routes whose XDG trash answers empty once the empty has run. */
   function xdgEmptiedRoutes(): Record<string, Route> {
@@ -3263,15 +3555,17 @@ describe('trash buttons', () => {
     return routes;
   }
 
-  it('with Show Volumes on, the summary bar button posts scope source xdg after a dialog naming the XDG trash', async () => {
+  it('with Show Volumes on, the home band button posts scope source xdg after a dialog naming the XDG trash', async () => {
     showVolumesOn();
     const widget = await open(bandRoutes());
-    const button = summaryEmpty(widget);
+    const button = homeEmpty(widget);
     expect(button.hidden).toBe(false);
+    expect(button.disabled).toBe(false);
     expect(button.getAttribute('type')).toBe('button');
     expect(button.title).toBe('Empty Trash in Trash');
     expect(button.querySelector('svg')!.dataset.icon).toBe('trash');
-    expect(summary(widget).lastElementChild).toBe(button);
+    expect(sectionHeader(widget, 'xdg').nextElementSibling).toBe(button);
+    expect(summary(widget).querySelector('button')).toBeNull();
 
     (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
     serve(xdgEmptiedRoutes());
@@ -3290,47 +3584,53 @@ describe('trash buttons', () => {
       source: 'xdg'
     });
     expect(rows(widget)).toHaveLength(0);
-    expect(button.hidden).toBe(true);
+    expect(button.hidden).toBe(false);
+    expect(button.disabled).toBe(true);
     expect(veil(widget).hidden).toBe(true);
     // The other trashes keep their rows
     expect(sectionRows(widget, LOCATION)).toHaveLength(2);
   });
 
-  it('hides the summary bar button at 0 items and while Show Volumes is off', async () => {
+  it('disables the home band button at 0 items and has no home band while Show Volumes is off', async () => {
+    const homeBand = (widget: TrashWidget) =>
+      widget.node.querySelector('[data-source="xdg"]');
     const off = await open(bandRoutes());
     expect(rows(off).length).toBeGreaterThan(0);
-    expect(summaryEmpty(off).hidden).toBe(true);
+    expect(homeBand(off)).toBeNull();
 
     showVolumesOn();
     const on = await open(bandRoutes());
-    expect(summaryEmpty(on).hidden).toBe(false);
+    expect(homeEmpty(on).hidden).toBe(false);
     serve(bandRoutes());
     await (on as any)._commands.execute('trash:show-volumes');
-    expect(summaryEmpty(on).hidden).toBe(true);
+    expect(homeBand(on)).toBeNull();
 
+    showVolumesOn();
     const empty = await open(xdgEmptiedRoutes());
-    expect(summaryEmpty(empty).hidden).toBe(true);
+    expect(homeEmpty(empty).hidden).toBe(false);
+    expect(homeEmpty(empty).disabled).toBe(true);
   });
 
-  it('keeps the focus in the panel after a keyboard empty from the summary bar', async () => {
+  it('keeps the focus in the panel after a keyboard empty from the home band', async () => {
     showVolumesOn();
     const widget = await openAttached(bandRoutes());
     (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
     serve(xdgEmptiedRoutes());
 
-    const button = summaryEmpty(widget);
+    const button = homeEmpty(widget);
     button.focus();
     press(button, 'Enter');
     click(button);
     await settle();
-    expect(button.hidden).toBe(true);
-    // The button hands the focus to the main list; the emptied list hides and
-    // hands it on to the refresh button, never to the page body
-    expect(document.activeElement).toBe(refreshButton(widget));
+    expect(button.disabled).toBe(true);
+    // The disabled button hands the focus to its fold toggle, never to the
+    // page body
+    expect(document.activeElement).toBe(sectionHeader(widget, 'xdg'));
   });
 
-  // ACC-SCOPE-98-TOP-NAME: with Show Volumes on the summary bar names the XDG trash
-  const XDG_LABEL = '~/.local/share/Trash';
+  // ACC-SCOPE-104-VOLUME-BANDS: the home band names the XDG trash, the summary
+  // bar keeps the total
+  const XDG_LABEL = '~';
   const summaryText = (widget: TrashWidget) =>
     find(widget, '.jp-TrashPanel-summaryText');
 
@@ -3342,24 +3642,24 @@ describe('trash buttons', () => {
     return routes;
   }
 
-  it('with Show Volumes on, the summary text starts with the XDG label, which its tooltip holds and the ellipsis shortens', async () => {
+  it('with Show Volumes on, the home band carries the XDG label, which its tooltip holds and the ellipsis shortens, and the summary text carries none', async () => {
     showVolumesOn();
     const widget = await open(labelledRoutes());
-    const text = summaryText(widget);
-    expect(text.textContent).toBe(`${XDG_LABEL} \u00B7 1 item \u00B7 5 B`);
+    expect(summaryText(widget).textContent).toBe('16 items \u00B7 0 B');
+    expect(summaryText(widget).children).toHaveLength(0);
     // The band's one-line parts: the label shortens, the count never shrinks
-    expect(text.classList.contains('jp-TrashPanel-sectionLabel')).toBe(true);
-    const label = text.querySelector<HTMLElement>(
+    const band = sectionLabel(widget, 'xdg');
+    const label = band.querySelector<HTMLElement>(
       ':scope > .jp-TrashPanel-sectionText'
     )!;
     expect(label.textContent).toBe(XDG_LABEL);
     expect(label.title).toBe(XDG_LABEL);
     expect(
-      text.querySelector(':scope > .jp-TrashPanel-sectionCount')!.textContent
-    ).toBe(' \u00B7 1 item \u00B7 5 B');
+      band.querySelector(':scope > .jp-TrashPanel-sectionCount')!.textContent
+    ).toBe(' (1 item, 5 B)');
   });
 
-  it('with Show Volumes off, the summary text is the count and size only, and turning it off drops the label', async () => {
+  it('with Show Volumes off, the summary text is the count and size only, and turning it off drops the total', async () => {
     const off = await open(labelledRoutes());
     expect(summaryText(off).textContent).toBe('5 items \u00B7 0 B');
     expect(summaryText(off).children).toHaveLength(0);
@@ -3367,13 +3667,12 @@ describe('trash buttons', () => {
     showVolumesOn();
     const widget = await open(labelledRoutes());
     const text = summaryText(widget);
-    expect(text.textContent!.startsWith(XDG_LABEL)).toBe(true);
+    expect(text.textContent).toBe('16 items \u00B7 0 B');
     serve(labelledRoutes());
     await (widget as any)._commands.execute('trash:show-volumes');
     await settle();
     expect(text.textContent).toBe('5 items \u00B7 0 B');
     expect(text.children).toHaveLength(0);
-    expect(text.classList.contains('jp-TrashPanel-sectionLabel')).toBe(false);
   });
 
   it('keeps the focus in the panel after a keyboard empty from the header button', async () => {
@@ -3390,7 +3689,7 @@ describe('trash buttons', () => {
     press(button, 'Enter');
     click(button);
     await settle();
-    expect(button.hidden).toBe(true);
+    expect(button.disabled).toBe(true);
     // The main list is already hidden, so the button hands the focus to the
     // refresh button, never to the page body
     expect(document.activeElement).toBe(refreshButton(widget));
@@ -3410,5 +3709,212 @@ describe('trash buttons', () => {
     expect(button.parentElement).toBe(header.parentElement);
     expect(header.nextElementSibling).toBe(button);
     expect(button.querySelector('svg')!.dataset.icon).toBe('trash');
+  });
+
+  // DEF-PANEL-41-SECTION-EMPTY: an expanded empty band says Trash is empty
+  const emptyLine = (widget: TrashWidget, id: string) =>
+    sectionOf(widget, id).querySelector<HTMLElement>('.jp-TrashPanel-empty')!;
+
+  /** Band routes whose /home/cache trash holds 0 items. */
+  function emptyCacheRoutes(): Record<string, Route> {
+    const routes = bandRoutes();
+    routes.sources = (routes.sources as ISource[]).map(source =>
+      source.id === 'cache' ? sourceOf('cache', 0, '0 B') : source
+    );
+    routes['list?source=cache'] = listOf([]);
+    return routes;
+  }
+
+  it('shows Trash is empty under an expanded band whose trash lists 0 items, and drops it when the trash gains an item', async () => {
+    showVolumesOn();
+    const widget = await open(emptyCacheRoutes());
+    const line = emptyLine(widget, 'cache');
+    expect(line.hidden).toBe(false);
+    expect(line.textContent).toBe('Trash is empty');
+    expect(line.previousElementSibling).toBe(sectionList(widget, 'cache'));
+    expect(emptyLine(widget, 'home:alice').hidden).toBe(true);
+
+    serve(bandRoutes());
+    void widget.refresh();
+    await settle();
+    expect(sectionRows(widget, 'cache')).toHaveLength(1);
+    expect(line.hidden).toBe(true);
+  });
+
+  it('shows no Trash is empty line under a folded band or while the band listing is pending', async () => {
+    showVolumesOn();
+    const routes = emptyCacheRoutes();
+    const pending = deferred<unknown>();
+    routes['list?source=cache'] = () => pending.promise;
+    const widget = await open(routes);
+    expect(emptyLine(widget, 'cache').hidden).toBe(true);
+
+    pending.resolve(listOf([]));
+    await settle();
+    expect(emptyLine(widget, 'cache').hidden).toBe(false);
+
+    click(sectionHeader(widget, 'cache'));
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(emptyLine(widget, 'cache').hidden).toBe(true);
+    click(sectionHeader(widget, 'cache'));
+    expect(emptyLine(widget, 'cache').hidden).toBe(false);
+  });
+
+  it('shows no Trash is empty line under a band that shows an error', async () => {
+    showVolumesOn();
+    const failing = emptyCacheRoutes();
+    failing['list?source=cache'] = () => Promise.reject(httpError(500));
+    const widget = await open(failing);
+    expect(sectionLabel(widget, 'cache').textContent).toContain('HTTP 500');
+    expect(emptyLine(widget, 'cache').hidden).toBe(true);
+
+    const unreadable = emptyCacheRoutes();
+    unreadable.sources = (unreadable.sources as ISource[]).map(source =>
+      source.id === 'cache'
+        ? sourceOf('cache', 0, '0 B', 'Permission denied')
+        : source
+    );
+    const denied = await open(unreadable);
+    expect(sectionLabel(denied, 'cache').textContent).toContain(
+      'Permission denied'
+    );
+    expect(emptyLine(denied, 'cache').hidden).toBe(true);
+  });
+});
+
+// ACC-SCOPE-104-VOLUME-BANDS: with Show Volumes on, the summary bar totals
+// every trash and the home band ~ folds the main list
+describe('home band', () => {
+  const LOCATION = 'location:/mnt/data/.Trash-1000';
+
+  /** The home trash holding two entries and a location trash holding three. */
+  function homeRoutes(): Record<string, Route> {
+    return {
+      sources: [
+        { ...sourceOf('xdg', 2, '2.0 KB'), label: '~', total_bytes: 2048 },
+        { ...sourceOf(LOCATION, 3, '1.0 KB'), total_bytes: 1024 }
+      ],
+      list: listOf([file('a.txt'), file('b.txt')], '2.0 KB'),
+      'list?source=location%3A%2Fmnt%2Fdata%2F.Trash-1000': listOf(
+        [file('c.txt'), file('d.txt'), file('e.txt')],
+        '1.0 KB'
+      )
+    };
+  }
+
+  const columnHeader = (widget: TrashWidget) =>
+    find(widget, '.jp-TrashPanel-columnHeader');
+
+  it('with Show Volumes on, the summary bar totals every trash with no trash button, and the home band shows ~, its count and an enabled trash button', async () => {
+    showVolumesOn();
+    const widget = await open(homeRoutes());
+
+    expect(summary(widget).textContent).toBe('5 items \u00B7 3.0 KB');
+    expect(summary(widget).querySelector('button')).toBeNull();
+
+    // The home band sits between the summary bar and the breadcrumb
+    const home = sectionOf(widget, 'xdg');
+    expect(summary(widget).nextElementSibling).toBe(home);
+    expect(home.nextElementSibling).toBe(breadcrumb(widget));
+    expect(sectionLabel(widget, 'xdg').textContent).toBe('~ (2 items, 2.0 KB)');
+    const button = home.querySelector<HTMLButtonElement>(
+      '.jp-TrashPanel-sectionEmpty'
+    )!;
+    expect(button.disabled).toBe(false);
+    expect(button.title).toBe('Empty Trash in ~');
+    // Its rows are the main list's, shown once
+    expect(rowNames(widget).sort()).toEqual(['a.txt', 'b.txt']);
+    expect(sectionRows(widget, LOCATION)).toHaveLength(3);
+  });
+
+  it('folding the home band hides the column header and the main list and saves xdg as folded; a reload keeps it folded', async () => {
+    showVolumesOn();
+    const widget = await open(homeRoutes());
+    expect(columnHeader(widget).style.display).toBe('flex');
+    expect(listBox(widget).style.display).toBe('block');
+
+    click(sectionHeader(widget, 'xdg'));
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(columnHeader(widget).style.display).toBe('none');
+    expect(listBox(widget).style.display).toBe('none');
+    expect(sectionOf(widget, 'xdg').classList).toContain('jp-mod-collapsed');
+    // The other bands take the free height
+    expect(widget.node.classList).toContain('jp-mod-empty');
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toContain(
+      'xdg'
+    );
+
+    const again = await open(homeRoutes());
+    expect(sectionHeader(again, 'xdg').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(columnHeader(again).style.display).toBe('none');
+    expect(listBox(again).style.display).toBe('none');
+
+    click(sectionHeader(again, 'xdg'));
+    expect(columnHeader(again).style.display).toBe('flex');
+    expect(listBox(again).style.display).toBe('block');
+    expect(rowNames(again).sort()).toEqual(['a.txt', 'b.txt']);
+  });
+
+  // DEF-PANEL-41-SECTION-EMPTY, home half: the main list's empty line
+  it('shows Trash is empty under the expanded home band of an empty home trash, and none while it is folded', async () => {
+    showVolumesOn();
+    const routes = homeRoutes();
+    routes.sources = [
+      { ...sourceOf('xdg', 0, '0 B'), label: '~' },
+      (routes.sources as ISource[])[1]
+    ];
+    routes.list = listOf([]);
+    const widget = await open(routes);
+    const line = find(widget, ':scope > .jp-TrashPanel-empty');
+    expect(line.textContent).toBe('Trash is empty');
+    expect(line.style.display).toBe('');
+
+    click(sectionHeader(widget, 'xdg'));
+    expect(line.style.display).toBe('none');
+    click(sectionHeader(widget, 'xdg'));
+    expect(line.style.display).toBe('');
+  });
+
+  it('builds the home band alone, with no list or Trash is empty line of its own', async () => {
+    showVolumesOn();
+    const widget = await open(homeRoutes());
+
+    const home = sectionOf(widget, 'xdg');
+    expect(home.children).toHaveLength(1);
+    expect(home.firstElementChild!.className).toBe('jp-TrashPanel-sectionBand');
+    // Its rows are the main list, so no detached list or line is held either
+    const parts = (widget as any)._sectionParts.get('xdg');
+    expect(parts.section).toBe(home);
+    expect(parts).not.toHaveProperty('list');
+    expect(parts).not.toHaveProperty('none');
+    // A location band keeps the list it shows
+    expect(
+      sectionOf(widget, LOCATION).querySelector('.jp-TrashPanel-sectionList')
+    ).toBe((widget as any)._sectionParts.get(LOCATION).list);
+  });
+
+  it('with Show Volumes off, there is no home band and the summary bar reads the merged count as before, even with the home band saved folded', async () => {
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(['xdg']));
+    const widget = await open(homeRoutes());
+
+    expect(widget.node.querySelector('[data-source="xdg"]')).toBeNull();
+    expect(sections(widget)).toHaveLength(0);
+    expect(summary(widget).nextElementSibling).toBe(breadcrumb(widget));
+    expect(summary(widget).textContent).toBe('5 items \u00B7 0 B');
+    expect(summary(widget).querySelector('button')).toBeNull();
+    expect(listBox(widget).style.display).toBe('block');
+    expect(rowNames(widget).sort()).toEqual([
+      'a.txt',
+      'b.txt',
+      'c.txt',
+      'd.txt',
+      'e.txt'
+    ]);
   });
 });

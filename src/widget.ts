@@ -6,6 +6,7 @@ import { Menu } from '@lumino/widgets';
 import { CommandRegistry } from '@lumino/commands';
 import { Message } from '@lumino/messaging';
 import { ServerConnection } from '@jupyterlab/services';
+import { closeIcon, filterIcon } from '@jupyterlab/ui-components';
 import { requestAPI } from './request';
 import { trashIcon, folderIcon, fileIcon, refreshIcon } from './icon';
 
@@ -72,6 +73,11 @@ function formatSize(bytes: number): string {
   return `${bytes.toFixed(1)} PB`;
 }
 
+/** The summary bar's count and size. */
+function countText(count: number, size: string): string {
+  return `${count} ${count === 1 ? 'item' : 'items'} \u00B7 ${size}`;
+}
+
 /**
  * The row an arrow, Home or End key moves to in a list of `count` rows, or
  * null for any other key. Without an active row the arrows start at an end.
@@ -109,18 +115,19 @@ function isUnder(path: string, root: string): boolean {
 }
 
 /**
- * Hide or show a button. A button that hides while it holds the focus hands
- * it to `next` first, so the focus stays in the panel, never on the page body.
+ * Disable a button, or enable it. A button disabled while it holds the focus
+ * hands it to `next` first, so the focus stays in the panel, never on the
+ * page body.
  */
-function setHidden(
-  button: HTMLElement,
-  hidden: boolean,
+function setOff(
+  button: HTMLButtonElement,
+  off: boolean,
   next: HTMLElement
 ): void {
-  if (hidden && button === document.activeElement) {
+  if (off && button === document.activeElement) {
     next.focus();
   }
-  button.hidden = hidden;
+  button.disabled = off;
 }
 
 /** Shift+F10 and the ContextMenu key open a row menu. */
@@ -165,6 +172,7 @@ interface ITrashSource {
   label: string;
   item_count: number;
   total_size: string;
+  total_bytes: number;
   error: string;
 }
 
@@ -189,9 +197,12 @@ interface ISectionParts {
   section: HTMLDivElement;
   header: HTMLButtonElement;
   empty: HTMLButtonElement;
+  // The Trash is empty line under the band of a trash that lists nothing;
+  // the home band has none and no list, its rows are the main list
+  none?: HTMLDivElement;
   caret: HTMLSpanElement;
   label: HTMLSpanElement;
-  list: HTMLDivElement;
+  list?: HTMLDivElement;
   // The listing the rows were drawn from, so an unchanged one is not redrawn
   key?: string;
 }
@@ -203,15 +214,21 @@ export class TrashWidget extends Widget {
   private _header: HTMLDivElement;
   private _summary: HTMLDivElement;
   private _summaryText: HTMLSpanElement;
-  // The count and size the summary bar shows after any trash label
+  // The count and size of the listing in view; with Show Volumes on, the top
+  // level shows the total of every trash instead
   private _summaryCount = '';
-  private _summaryEmpty: HTMLButtonElement;
   private _breadcrumb: HTMLDivElement;
   private _columnHeader: HTMLDivElement;
   private _list: HTMLDivElement;
   private _emptyMessage: HTMLDivElement;
   private _loadingVeil: HTMLDivElement;
   private _emptyBtn: HTMLButtonElement;
+  private _filterBtn: HTMLButtonElement;
+  private _filterWrap: HTMLDivElement;
+  private _filterInput: HTMLInputElement;
+  private _filterClear: HTMLButtonElement;
+  // The text the visible rows must carry in their name or original path
+  private _filter = '';
   private _refreshBtn: HTMLButtonElement;
   private _commands: CommandRegistry;
   private _contextMenu: Menu;
@@ -327,7 +344,7 @@ export class TrashWidget extends Widget {
       }
       this._sectionParts
         .get(this._sectionTarget.source)
-        ?.list.querySelector<HTMLElement>('[tabindex="0"]')
+        ?.list?.querySelector<HTMLElement>('[tabindex="0"]')
         ?.focus();
     });
 
@@ -340,11 +357,22 @@ export class TrashWidget extends Widget {
     title.textContent = trans.__('Trash Management');
     this._header.appendChild(title);
 
+    // Left of Empty Trash, so that button stays directly left of Refresh
+    this._filterBtn = document.createElement('button');
+    this._filterBtn.className = 'jp-TrashPanel-header-button';
+    this._filterBtn.title = trans.__('Filter trash');
+    // The pressed state is drawn with a class, which says nothing to a screen
+    // reader; the filter box starts hidden, so this starts false.
+    this._filterBtn.setAttribute('aria-pressed', 'false');
+    filterIcon.element({ container: this._filterBtn });
+    this._filterBtn.addEventListener('click', () => this._toggleFilter());
+    this._header.appendChild(this._filterBtn);
+
     this._emptyBtn = document.createElement('button');
     this._emptyBtn.className =
       'jp-TrashPanel-header-button jp-TrashPanel-header-button-danger';
     this._emptyBtn.title = trans.__('Empty Trash');
-    this._emptyBtn.hidden = true;
+    this._emptyBtn.disabled = true;
     trashIcon.element({ container: this._emptyBtn });
     this._emptyBtn.addEventListener('click', () => this._cleanSources('all'));
     this._header.appendChild(this._emptyBtn);
@@ -359,11 +387,58 @@ export class TrashWidget extends Widget {
 
     this.node.appendChild(this._header);
 
+    // Filter box under the header, hidden until the filter button shows it.
+    // It sits outside the list and the sections, so a re-render keeps the
+    // input and the caret the user is typing with.
+    this._filterWrap = document.createElement('div');
+    this._filterWrap.className = 'jp-TrashPanel-filterWrap';
+    // The `hidden` attribute toggles `display: none` through the user agent
+    // stylesheet, so the wrapper's `display: flex` must not override it.
+    this._filterWrap.hidden = true;
+
+    this._filterInput = document.createElement('input');
+    this._filterInput.type = 'search';
+    this._filterInput.className = 'jp-TrashPanel-filterInput';
+    this._filterInput.placeholder = trans.__('Filter trash...');
+    this._filterInput.setAttribute('aria-label', trans.__('Filter trash'));
+    this._filterInput.spellcheck = false;
+    this._filterInput.addEventListener('input', () => {
+      this._filter = this._filterInput.value;
+      this._syncFilterClear();
+      this._renderFiltered();
+    });
+
+    this._filterClear = document.createElement('button');
+    this._filterClear.className = 'jp-TrashPanel-filterClear';
+    this._filterClear.title = trans.__('Clear filter');
+    this._filterClear.hidden = true;
+    closeIcon.element({ container: this._filterClear });
+    this._filterClear.addEventListener('click', () => {
+      this._filter = '';
+      this._filterInput.value = '';
+      this._syncFilterClear();
+      this._renderFiltered();
+      // Clearing is a step in filtering, not the end of it - keep the caret
+      // in the field so the next query can be typed straight away.
+      this._filterInput.focus();
+    });
+
+    this._filterWrap.append(this._filterInput, this._filterClear);
+    this.node.appendChild(this._filterWrap);
+
     this._headerMenu = new Menu({ commands: this._commands });
     this._headerMenu.addItem({ command: 'trash:show-volumes' });
     // The focus the menu took goes back to the panel part it was opened on
     this._headerMenu.aboutToClose.connect(() => {
-      const opener = this._headerMenuOpener;
+      let opener = this._headerMenuOpener;
+      // A disabled trash button cannot take the focus; the element setOff
+      // hands its focus to takes it: the band's fold toggle, or Refresh
+      if (opener instanceof HTMLButtonElement && opener.disabled) {
+        opener =
+          opener === this._emptyBtn
+            ? this._refreshBtn
+            : opener.previousElementSibling;
+      }
       if (opener instanceof HTMLElement && this.node.contains(opener)) {
         opener.focus();
       }
@@ -372,7 +447,9 @@ export class TrashWidget extends Widget {
     this.node.addEventListener('contextmenu', (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      this._headerMenuOpener = document.activeElement;
+      this._headerMenuOpener =
+        (e.target as Element).closest('button:disabled') ??
+        document.activeElement;
       this._headerMenu.open(e.clientX, e.clientY);
     });
 
@@ -383,16 +460,6 @@ export class TrashWidget extends Widget {
     this._summaryText = document.createElement('span');
     this._summaryText.className = 'jp-TrashPanel-summaryText';
     this._summary.appendChild(this._summaryText);
-    // Show Volumes on: the band button of the XDG trash, at the bar's right end
-    this._summaryEmpty = document.createElement('button');
-    this._summaryEmpty.type = 'button';
-    this._summaryEmpty.className = 'jp-TrashPanel-sectionEmpty';
-    this._summaryEmpty.hidden = true;
-    trashIcon.element({ container: this._summaryEmpty });
-    this._summaryEmpty.addEventListener('click', () =>
-      this._emptySource('xdg')
-    );
-    this._summary.appendChild(this._summaryEmpty);
     this.node.appendChild(this._summary);
 
     // Create breadcrumb row: shown only inside a folder
@@ -505,8 +572,8 @@ export class TrashWidget extends Widget {
 
     this._commands.addCommand('trash:show-volumes', {
       describedBy: { args: { type: 'object', properties: {} } },
-      label: trans.__('Show Volumes'),
-      isToggled: () => this._showVolumes,
+      label: () =>
+        this._showVolumes ? trans.__('Hide Volumes') : trans.__('Show Volumes'),
       execute: () => this.toggleShowVolumes()
     });
 
@@ -546,7 +613,9 @@ export class TrashWidget extends Widget {
     if (inPanel && !this.node.contains(document.activeElement)) {
       this._focusListOrRefresh();
     }
-    this._paintEmptyBtn();
+    this._renderMain();
+    // The menus and the palette redraw the entry with its new label
+    this._commands.notifyCommandChanged('trash:show-volumes');
     void this.refresh(this._pathSource === 'xdg' ? this._path : [], 'xdg');
   }
 
@@ -764,6 +833,56 @@ export class TrashWidget extends Widget {
     }
   }
 
+  /** Show or hide the filter box. Hiding clears the query, so no filter the
+   * user cannot see narrows the rows. */
+  private _toggleFilter(): void {
+    const show = this._filterWrap.hidden;
+    // A hidden subtree cannot hold the focus; the header button takes it
+    if (!show && this._filterWrap.contains(document.activeElement)) {
+      this._filterBtn.focus();
+    }
+    this._filterWrap.hidden = !show;
+    this._filterBtn.classList.toggle('jp-mod-active', show);
+    this._filterBtn.setAttribute('aria-pressed', String(show));
+    if (show) {
+      this._filterInput.focus();
+      return;
+    }
+    this._filter = '';
+    this._filterInput.value = '';
+    this._syncFilterClear();
+    this._renderFiltered();
+  }
+
+  /** Show the clear button only while the field has text. */
+  private _syncFilterClear(): void {
+    this._filterClear.hidden = !this._filterInput.value;
+  }
+
+  /** True when the row's name or original path carries the query, ignoring
+   * case. An empty query keeps every row. */
+  private _matchesFilter(item: ITrashItem): boolean {
+    const query = this._filter.trim().toLowerCase();
+    return (
+      query === '' ||
+      item.name.toLowerCase().includes(query) ||
+      item.original_path.toLowerCase().includes(query)
+    );
+  }
+
+  /** Redraw the main list and every section with the current query. */
+  private _renderFiltered(): void {
+    // A row the query hides must not stay selected, or an action reaches a
+    // file the user cannot see. The drawn rows are _items filtered, and
+    // _getSortedItems only reorders them.
+    const shown = new Set(this._items.filter(i => this._matchesFilter(i)));
+    this._selectedItems = new Set(
+      [...this._selectedItems].filter(i => shown.has(i))
+    );
+    this._renderItems();
+    this._renderSections();
+  }
+
   /**
    * Draw the main list from the last main listing. At the top level with
    * Show Volumes off, the rows of every other source's own listing join it,
@@ -812,54 +931,40 @@ export class TrashWidget extends Widget {
   }
 
   private _renderSummary(data: ITrashListResponse): void {
-    const count = data.item_count;
-    const noun = count === 1 ? 'item' : 'items';
-    this._summaryCount = `${count} ${noun} \u00B7 ${data.total_size_formatted}`;
-    this._paintEmptyBtn(count);
+    this._summaryCount = countText(data.item_count, data.total_size_formatted);
+    this._paintEmptyBtn(data.item_count);
   }
 
   /**
-   * The header trash button empties every source, so it shows while any holds
-   * an item. With Show Volumes on, the summary bar button empties the XDG
-   * trash alone and shows while the main list holds an item, and the summary
-   * text starts with that trash's label.
+   * The header trash button empties every source, so it is enabled while any
+   * holds an item. With Show Volumes on, the summary bar at the top level
+   * totals every trash from the sources answer.
    */
   private _paintEmptyBtn(count = this._mainList.item_count): void {
     // Inside a folder the trash holds at least that folder
-    setHidden(
+    setOff(
       this._emptyBtn,
       this._path.length === 0 &&
         count === 0 &&
         this._sources.every(source => source.item_count === 0),
       this._refreshBtn
     );
-    const xdg = this._sources.find(source => source.id === 'xdg');
-    if (xdg !== undefined) {
-      this._summaryEmpty.title = trans.__('Empty Trash in %1', xdg.label);
+    let text = this._summaryCount;
+    if (this._showVolumes && this._path.length === 0) {
+      const items = this._sources.reduce(
+        (sum, source) => sum + source.item_count,
+        0
+      );
+      const bytes = this._sources.reduce(
+        (sum, source) => sum + source.total_bytes,
+        0
+      );
+      // Before the first sources answer the bar stays blank: a count of the
+      // main list alone would be a total that leaves out a trash
+      text =
+        this._sources.length === 0 ? '' : countText(items, formatSize(bytes));
     }
-    // Labelled like a band: the label takes the ellipsis, the count never shrinks
-    const labelled = this._showVolumes && xdg !== undefined;
-    this._summaryText.classList.toggle('jp-TrashPanel-sectionLabel', labelled);
-    if (labelled) {
-      const text = document.createElement('span');
-      text.className = 'jp-TrashPanel-sectionText';
-      text.textContent = xdg.label;
-      text.title = xdg.label;
-      const counted = document.createElement('span');
-      counted.className = 'jp-TrashPanel-sectionCount';
-      // Before the first main listing the label stands alone
-      counted.textContent =
-        this._summaryCount && ` \u00B7 ${this._summaryCount}`;
-      this._summaryText.replaceChildren(text, counted);
-    } else {
-      this._summaryText.textContent = this._summaryCount;
-    }
-    // A list left empty hides too and hands the focus to the refresh button
-    setHidden(
-      this._summaryEmpty,
-      !this._showVolumes || count === 0 || xdg === undefined,
-      this._list
-    );
+    this._summaryText.textContent = text;
   }
 
   /**
@@ -914,25 +1019,49 @@ export class TrashWidget extends Widget {
    * source that still has a section keeps its elements and the focus in them.
    */
   private _renderSections(): void {
+    const folded = this._homeFolded();
     const previous = new Map(this._sectionParts);
     this._sectionParts.clear();
-    // The xdg trash stays the main section above; Show Volumes off draws none
-    const sources = this._showVolumes
-      ? this._sources.filter(source => source.id !== 'xdg')
-      : [];
-    sources.forEach((source, index) => {
+    // Show Volumes off draws none
+    const sources = this._showVolumes ? this._sources : [];
+    let index = 0;
+    for (const source of sources) {
       const parts = previous.get(source.id) ?? this._createSection(source);
       previous.delete(source.id);
       this._sectionParts.set(source.id, parts);
-      // Moving a node drops the focus in it, so only a misplaced section moves
-      const at = this._sectionsEl.children[index] ?? null;
-      if (at !== parts.section) {
-        this._sectionsEl.insertBefore(parts.section, at);
+      // Moving a node drops the focus in it, so only a misplaced section
+      // moves; the home band sits above the main list it folds
+      if (source.id === 'xdg') {
+        if (this._breadcrumb.previousElementSibling !== parts.section) {
+          this.node.insertBefore(parts.section, this._breadcrumb);
+        }
+      } else {
+        const at = this._sectionsEl.children[index++] ?? null;
+        if (at !== parts.section) {
+          this._sectionsEl.insertBefore(parts.section, at);
+        }
       }
       this._paintSection(source, parts);
-    });
+    }
     for (const parts of previous.values()) {
       parts.section.remove();
+    }
+    // A home band that came or went folds or unfolds the main list
+    if (this._homeFolded() !== folded) {
+      this._paintHomeFold();
+    }
+  }
+
+  /** True while the home band shows folded, which hides the main list. */
+  private _homeFolded(): boolean {
+    return this._sectionParts.has('xdg') && this._collapsed.has('xdg');
+  }
+
+  /** Show or hide the breadcrumb, column header and main list by the home fold. */
+  private _paintHomeFold(): void {
+    this._renderItems();
+    if (this._renderBreadcrumb()) {
+      this._focusListOrRefresh();
     }
   }
 
@@ -977,6 +1106,16 @@ export class TrashWidget extends Widget {
     trashIcon.element({ container: empty });
     empty.addEventListener('click', () => this._emptySource(source.id));
     band.append(header, empty);
+    section.append(band);
+    // The home band's rows are the main list below it
+    if (source.id === 'xdg') {
+      return { section, header, empty, caret, label };
+    }
+
+    const none = document.createElement('div');
+    none.className = 'jp-TrashPanel-empty';
+    none.textContent = trans.__('Trash is empty');
+    none.hidden = true;
 
     const list = document.createElement('div');
     list.className = 'jp-TrashPanel-sectionList';
@@ -1003,8 +1142,8 @@ export class TrashWidget extends Widget {
       this._activateSectionRow(source.id, list, e.target as HTMLElement)
     );
 
-    section.append(band, list);
-    return { section, header, empty, caret, label, list };
+    section.append(list, none);
+    return { section, header, empty, none, caret, label, list };
   }
 
   private _toggleSection(id: string): void {
@@ -1017,6 +1156,9 @@ export class TrashWidget extends Widget {
     if (parts !== undefined && source !== undefined) {
       this._paintSection(source, parts);
     }
+    if (id === 'xdg') {
+      this._paintHomeFold();
+    }
   }
 
   /**
@@ -1028,12 +1170,23 @@ export class TrashWidget extends Widget {
     const expanded = !this._collapsed.has(source.id);
     parts.header.setAttribute('aria-expanded', String(expanded));
     parts.caret.textContent = expanded ? '▾' : '▸';
-    parts.list.hidden = !expanded;
-    setHidden(parts.empty, source.item_count === 0, parts.header);
+    // A folded band draws the divider under it
+    parts.section.classList.toggle('jp-mod-collapsed', !expanded);
+    setOff(parts.empty, source.item_count === 0, parts.header);
 
     const cached = this._sectionListings.get(source.id);
     const error =
       source.error || (cached instanceof Error ? cached.message : '');
+    if (parts.list && parts.none) {
+      parts.list.hidden = !expanded;
+      // Not while folded, pending or failed
+      parts.none.hidden =
+        !expanded ||
+        Boolean(error) ||
+        cached === undefined ||
+        cached instanceof Error ||
+        cached.items.length > 0;
+    }
     // The label or the error takes the ellipsis; the count and size never shrink
     const text = document.createElement('span');
     text.className = 'jp-TrashPanel-sectionText';
@@ -1044,7 +1197,7 @@ export class TrashWidget extends Widget {
     text.title = text.textContent;
     if (error) {
       parts.label.replaceChildren(text);
-      parts.list.innerHTML = '';
+      parts.list?.replaceChildren();
       parts.key = undefined;
       return;
     }
@@ -1052,7 +1205,8 @@ export class TrashWidget extends Widget {
     count.className = 'jp-TrashPanel-sectionCount';
     count.textContent = this._sourceCount(source);
     parts.label.replaceChildren(text, count);
-    if (!expanded) {
+    // The home band's rows are the main list, which lists on its own
+    if (!expanded || parts.list === undefined) {
       return;
     }
 
@@ -1061,14 +1215,16 @@ export class TrashWidget extends Widget {
     if (cached === undefined || cached instanceof Error) {
       return;
     }
-    // An unchanged listing keeps its rows, and the focused one, and only
-    // moves their ages on
-    const key = JSON.stringify(
+    // An unchanged listing and query keep their rows, and the focused one,
+    // and only move their ages on
+    const shown = cached.items.filter(item => this._matchesFilter(item));
+    const key = JSON.stringify([
+      this._filter.trim().toLowerCase(),
       cached.items.map(item => [item.trash_path, item.size, item.deletion_date])
-    );
+    ]);
     if (key === parts.key) {
-      cached.items.forEach((item, index) => {
-        parts.list.children[index].querySelector(
+      shown.forEach((item, index) => {
+        parts.list!.children[index].querySelector(
           '.jp-TrashPanel-sectionAge'
         )!.textContent = this._formatRelativeTime(item.deletion_date);
       });
@@ -1077,7 +1233,7 @@ export class TrashWidget extends Widget {
     parts.key = key;
     const hadFocus = parts.list.contains(document.activeElement);
     parts.list.innerHTML = '';
-    for (const item of cached.items) {
+    for (const item of shown) {
       parts.list.appendChild(this._sectionRow(item, source.id));
     }
     // The rebuilt rows keep the active row and the focus it held
@@ -1142,7 +1298,7 @@ export class TrashWidget extends Widget {
       // The row after the restored one becomes active, or the one before it
       // when it was last; none leaves the focus to the section header
       const rows = Array.from(
-        this._sectionParts.get(source)?.list.children ?? []
+        this._sectionParts.get(source)?.list?.children ?? []
       ) as HTMLElement[];
       const index = rows.findIndex(row => row.dataset.path === item.trash_path);
       const next = (rows[index + 1] ?? rows[index - 1])?.dataset.path;
@@ -1267,7 +1423,7 @@ export class TrashWidget extends Widget {
       this._breadcrumb.querySelectorAll<HTMLElement>('.jp-TrashPanel-crumb')
     ).indexOf(document.activeElement as HTMLElement);
     this._breadcrumb.innerHTML = '';
-    this._breadcrumb.hidden = this._path.length === 0;
+    this._breadcrumb.hidden = this._path.length === 0 || this._homeFolded();
 
     const labels = ['Trash', ...this._path];
     const built: HTMLElement[] = [];
@@ -1419,8 +1575,10 @@ export class TrashWidget extends Widget {
   private _renderItems(): void {
     this._list.innerHTML = '';
     this._itemElements.clear();
-    // Lifts the height cap of the sections while the main list is empty
-    this.toggleClass('jp-mod-empty', this._items.length === 0);
+    const folded = this._homeFolded();
+    // Lifts the height cap of the sections while the main list is empty or
+    // folded
+    this.toggleClass('jp-mod-empty', this._items.length === 0 || folded);
 
     if (this._items.length === 0) {
       // The merged top level is empty only once every source has answered
@@ -1439,7 +1597,7 @@ export class TrashWidget extends Widget {
         this._path.length > 0
           ? trans.__('Folder is empty')
           : trans.__('Trash is empty');
-      this._emptyMessage.style.display = waiting ? 'none' : '';
+      this._emptyMessage.style.display = waiting || folded ? 'none' : '';
       // A hidden element cannot hold the focus; hand it to the header
       if (
         document.activeElement === this._list ||
@@ -1455,10 +1613,20 @@ export class TrashWidget extends Widget {
     }
 
     this._emptyMessage.style.display = 'none';
-    this._columnHeader.style.display = 'flex';
-    this._list.style.display = 'block';
+    // A hidden list cannot hold the focus; the home band's fold toggle takes it
+    if (
+      folded &&
+      (document.activeElement === this._list ||
+        this._columnHeader.contains(document.activeElement))
+    ) {
+      this._sectionParts.get('xdg')!.header.focus();
+    }
+    this._columnHeader.style.display = folded ? 'none' : 'flex';
+    this._list.style.display = folded ? 'none' : 'block';
 
-    this._sortedItems = this._getSortedItems();
+    this._sortedItems = this._getSortedItems().filter(item =>
+      this._matchesFilter(item)
+    );
     for (const item of this._sortedItems) {
       const itemEl = this._createItemElement(item);
       this._itemElements.set(item, itemEl);
@@ -1822,7 +1990,8 @@ export class TrashWidget extends Widget {
     }
     const strip = (
       data: ITrashListResponse,
-      source: string
+      source: string,
+      nested = false
     ): ITrashListResponse => {
       const items = data.items.filter(item => !gone(source, item));
       if (items.length === data.items.length) {
@@ -1830,6 +1999,23 @@ export class TrashWidget extends Widget {
       }
       // The server's total is the sum of its rows' sizes
       const totalSize = items.reduce((sum, item) => sum + item.size, 0);
+      // The source's count and size drop at once, until /sources answers. A
+      // row inside a folder shrinks its top-level item, not the item count;
+      // a listing newer than that answer can remove more than it counted.
+      const count = nested ? 0 : data.items.length - items.length;
+      const bytes = data.items.reduce((sum, item) => sum + item.size, 0);
+      this._sources = this._sources.map(entry => {
+        if (entry.id !== source) {
+          return entry;
+        }
+        const left = Math.max(0, entry.total_bytes - bytes + totalSize);
+        return {
+          ...entry,
+          item_count: Math.max(0, entry.item_count - count),
+          total_size: formatSize(left),
+          total_bytes: left
+        };
+      });
       return {
         items,
         item_count: items.length,
@@ -1837,7 +2023,11 @@ export class TrashWidget extends Widget {
         total_size_formatted: formatSize(totalSize)
       };
     };
-    this._mainList = strip(this._mainList, this._pathSource);
+    this._mainList = strip(
+      this._mainList,
+      this._pathSource,
+      this._path.length > 0
+    );
     for (const [id, listing] of this._sectionListings) {
       if (!(listing instanceof Error)) {
         this._sectionListings.set(id, strip(listing, id));
@@ -1858,7 +2048,12 @@ export class TrashWidget extends Widget {
   private _dropSources(emptied: Set<string>): void {
     this._sources = this._sources.map(source =>
       emptied.has(source.id)
-        ? { ...source, item_count: 0, total_size: formatSize(0) }
+        ? {
+            ...source,
+            item_count: 0,
+            total_size: formatSize(0),
+            total_bytes: 0
+          }
         : source
     );
     this._reloadChanged(source => emptied.has(source));

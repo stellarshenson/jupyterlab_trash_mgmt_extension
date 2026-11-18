@@ -2,6 +2,25 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.32] - 2026-11-18
+
+### Added
+
+- A filter button in the panel header opens a search box; typing narrows the main list and every section to the files and folders whose name or original path contains the text, ignoring case; the clear button restores every row and the caret stays in the field
+
+### Changed
+
+- Trash buttons stay visible and are disabled while their trash holds no items, instead of hiding
+- With Show Volumes on, the summary bar totals every trash and each trash is a foldable band below it: the home trash `~` first holding the main list, one band per other trash, an empty band reading Trash is empty; the menu reads Hide Volumes while the volumes show
+- The band count, the total line and the band trash button follow Restore and Delete at once, before the next sources answer
+- A menu opened on a disabled trash button returns the focus to the panel
+- The sources answer carries each trash's size in bytes
+
+### Fixed
+
+- An expanded empty section band showed no Trash is empty line
+- The home trash was labelled with its trash folder instead of `~`
+
 ## [1.1.29] - 2026-11-17
 
 ### Added

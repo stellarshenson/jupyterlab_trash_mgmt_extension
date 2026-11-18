@@ -108,14 +108,24 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
     // Register the Show Volumes toggle; the panel header menu holds it too
     commands.addCommand(CommandIDs.showVolumes, {
-      label: trans.__('Show Volumes'),
-      caption: trans.__('Show each trash source as its own section'),
+      label: () =>
+        widget.showVolumes
+          ? trans.__('Hide Volumes')
+          : trans.__('Show Volumes'),
+      caption: trans.__('Show or hide one band per trash'),
       describedBy: { args: { type: 'object', properties: {} } },
-      isToggled: () => widget.showVolumes,
       execute: () => {
         widget.toggleShowVolumes();
       }
     });
+    // A flip from the palette or a panel menu redraws the palette entry
+    (widget as any)._commands.commandChanged.connect(
+      (_: unknown, args: { id?: string }) => {
+        if (args.id === CommandIDs.showVolumes) {
+          commands.notifyCommandChanged(CommandIDs.showVolumes);
+        }
+      }
+    );
 
     // The palette is the only place the two cleans can be started from
     for (const command of Object.values(CommandIDs)) {

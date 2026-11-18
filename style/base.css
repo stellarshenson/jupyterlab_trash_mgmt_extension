@@ -56,12 +56,24 @@
   cursor: pointer;
 }
 
-.jp-TrashPanel-header-button:hover {
+/* The design system's disabled icon button: the glyph holds its place, no hover */
+.jp-TrashPanel-header-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.jp-TrashPanel-header-button:hover:not(:disabled) {
   background: var(--jp-layout-color3);
   color: var(--jp-ui-font-color1);
 }
 
-.jp-TrashPanel-header-button-danger:hover {
+/* The filter box is open; the same fill as the hover stays under the pointer */
+.jp-TrashPanel-header-button.jp-mod-active {
+  background: var(--jp-layout-color3);
+  color: var(--jp-brand-color1);
+}
+
+.jp-TrashPanel-header-button-danger:hover:not(:disabled) {
   background: var(--jp-error-color2);
   color: var(--jp-ui-inverse-font-color1);
 }
@@ -88,14 +100,95 @@
   pointer-events: none;
 }
 
+/* Filter box under the header, shown by the filter button */
+.jp-TrashPanel-filterWrap {
+  display: flex;
+  position: relative;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--jp-border-color2);
+  background: var(--jp-layout-color2);
+}
+
 /* `display: flex` above would beat the user-agent `[hidden] { display: none }`,
    so the hidden state has to be restated. */
-.jp-TrashPanel-header-button[hidden],
-.jp-TrashPanel-sectionEmpty[hidden] {
+.jp-TrashPanel-filterWrap[hidden] {
   display: none;
 }
 
-/* Summary bar: item count and total size of the listed location. */
+.jp-TrashPanel-filterInput {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+
+  /* Right padding keeps the text clear of the clear button */
+  padding: 2px 22px 2px 6px;
+  border: 1px solid var(--jp-border-color2);
+  border-radius: 2px;
+  background: var(--jp-layout-color1);
+  color: var(--jp-ui-font-color1);
+  font-family: inherit;
+  font-size: var(--jp-ui-font-size1);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* WebKit draws its own cancel button on type="search"; ours replaces it */
+.jp-TrashPanel-filterInput::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+.jp-TrashPanel-filterInput:focus {
+  border-color: var(--jp-brand-color1);
+}
+
+.jp-TrashPanel-filterInput::placeholder {
+  color: var(--jp-ui-font-color3);
+}
+
+/* Inside the field's right edge, inset by its 1px border so it never covers
+   the frame. The background matches the field's in every state. */
+.jp-TrashPanel-filterClear {
+  position: absolute;
+  top: 5px;
+  right: 9px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: var(--jp-layout-color1);
+  cursor: pointer;
+}
+
+.jp-TrashPanel-filterClear[hidden] {
+  display: none;
+}
+
+/* The icon carries `jp-icon3`, whose fill the theme drives, so the hover
+   state has to override the fill - `color` alone would do nothing. */
+.jp-TrashPanel-filterClear .jp-icon3 {
+  fill: var(--jp-ui-font-color2);
+}
+
+.jp-TrashPanel-filterClear:hover .jp-icon3 {
+  fill: var(--jp-ui-font-color1);
+}
+
+.jp-TrashPanel-filterClear svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Summary bar: item count and total size of the listed location, or of every
+   trash with Show Volumes on. */
 .jp-TrashPanel-summary {
   display: flex;
   align-items: center;
@@ -351,7 +444,25 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--jp-border-color3);
+}
+
+/* Dividers of a docked panel: one step from the band fill, between the
+   summary bar and the home band below it and under every band that shows no
+   rows and no empty line (folded, pending or failed); an expanded band's rows
+   and its empty line already differ in fill */
+.jp-TrashPanel-summary:has(+ .jp-TrashPanel-section) {
+  border-bottom: none;
+}
+
+.jp-TrashPanel-summary + .jp-TrashPanel-section {
+  border-top: 1px solid var(--jp-layout-color3);
+}
+
+.jp-TrashPanel-section.jp-mod-collapsed,
+.jp-TrashPanel-section:has(
+  > .jp-TrashPanel-sectionList:empty + .jp-TrashPanel-empty[hidden]
+) {
+  border-bottom: 1px solid var(--jp-layout-color3);
 }
 
 .jp-TrashPanel-sectionHeader {
@@ -410,10 +521,10 @@ button.jp-TrashPanel-sectionHeader:focus-visible {
   cursor: pointer;
 }
 
-/* The header danger button's hover */
-.jp-TrashPanel-sectionEmpty:hover {
-  background: var(--jp-error-color2);
-  color: var(--jp-ui-inverse-font-color1);
+/* The header button's disabled state */
+.jp-TrashPanel-sectionEmpty:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Inset, so the ring stays on the hover box */
@@ -422,10 +533,10 @@ button.jp-TrashPanel-sectionHeader:focus-visible {
   outline-offset: -1px;
 }
 
-/* The summary bar's XDG trash button: the band button, 2px from the bar's
-   right end like the bands; -1px above and below keeps the 16px line height */
-.jp-TrashPanel-summary .jp-TrashPanel-sectionEmpty {
-  margin: -1px -6px -1px 2px;
+/* The header danger button's hover */
+.jp-TrashPanel-sectionEmpty:hover:not(:disabled) {
+  background: var(--jp-error-color2);
+  color: var(--jp-ui-inverse-font-color1);
 }
 
 .jp-TrashPanel-caret {

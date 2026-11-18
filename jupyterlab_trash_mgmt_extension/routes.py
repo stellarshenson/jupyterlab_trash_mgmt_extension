@@ -396,10 +396,12 @@ def source_candidates(locations=()) -> list[dict]:
     """
     user_home = Path(os.path.abspath(os.path.expanduser('~')))
     user_homes = (user_home, user_home.resolve())
+    xdg_label = source_label(get_trash_dir(), user_homes)
     candidates = [
         {
             'id': 'xdg',
-            'label': source_label(get_trash_dir(), user_homes),
+            # A trash under HOME belongs to the home, as a location trash belongs to its location
+            'label': '~' if xdg_label.startswith('~') else xdg_label,
             'path': get_trash_dir(),
             'root': get_trash_dir().parent
         },
@@ -496,6 +498,7 @@ def collect_sources(locations=()) -> list[dict]:
             'label': source['label'],
             'item_count': 0,
             'total_size': format_size(0),
+            'total_bytes': 0,
             'error': ''
         }
         try:
@@ -503,10 +506,21 @@ def collect_sources(locations=()) -> list[dict]:
             files = source['directory'] / 'files'
             sizes = [get_item_size(item) for item in files.iterdir()] if files.exists() else []
             entry['item_count'] = len(sizes)
-            entry['total_size'] = format_size(sum(sizes))
+            entry['total_bytes'] = sum(sizes)
+            entry['total_size'] = format_size(entry['total_bytes'])
         except (PermissionError, OSError) as error:
             entry['error'] = str(error)
         sources.append(entry)
+    # The XDG trash is always monitored, so a missing folder is an empty trash
+    if not any(entry['id'] == 'xdg' for entry in sources):
+        sources.insert(0, {
+            'id': 'xdg',
+            'label': source_candidates(locations)[0]['label'],
+            'item_count': 0,
+            'total_size': format_size(0),
+            'total_bytes': 0,
+            'error': ''
+        })
     return sources
 
 

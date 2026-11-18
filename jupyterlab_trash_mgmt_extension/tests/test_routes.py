@@ -558,6 +558,47 @@ class TestTrashSources:
         assert sources[0]["total_size"] == "5 B"
         assert sources[0]["error"] == ""
 
+    def test_missing_xdg_trash_is_listed_first_as_empty(self, tmp_path, monkeypatch):
+        """A missing XDG trash folder is an empty source, listed before a location."""
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+        monkeypatch.setattr(routes, "HOMES_ROOT", tmp_path / "homes")
+        location = tmp_path / "nas"
+        add_trash_item(make_trash(location / f".Trash-{os.getuid()}"), "b.txt", "b.txt")
+
+        sources = collect_sources([str(location)])
+
+        assert sources[0]["id"] == "xdg"
+        assert sources[0]["item_count"] == 0
+        assert sources[0]["total_bytes"] == 0
+        assert sources[0]["error"] == ""
+        assert sources[1]["item_count"] == 1
+
+    def test_xdg_trash_under_home_is_labelled_with_the_home(self, tmp_path):
+        """DEF-PANEL-42-HOME-LABEL: the default XDG trash reads '~', not its trash folder."""
+        trash = make_trash(tmp_path / "home" / ".local" / "share" / "Trash")
+
+        sources = routes.existing_sources()
+
+        assert [(source["id"], source["label"]) for source in sources] == [("xdg", "~")]
+        # Only the label changes: the paths the server compares stay absolute
+        assert sources[0]["path"] == trash and sources[0]["root"].is_absolute()
+
+    def test_sources_carry_their_size_in_bytes(self, trash_dir, tmp_path, monkeypatch):
+        """ACC-SCOPE-104-VOLUME-BANDS: each source carries total_bytes, 0 when empty."""
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        make_trash(homes / "cache")
+        add_trash_item(trash_dir, "a.txt", "/home/user/a.txt", "12345")
+        add_trash_item(trash_dir, "b.txt", "/home/user/b.txt", "1234567")
+
+        sources = collect_sources()
+
+        assert [(source["id"], source["total_bytes"]) for source in sources] == [
+            ("xdg", 12),
+            ("cache", 0),
+        ]
+        assert [source["total_size"] for source in sources] == ["12 B", "0 B"]
+
     def test_home_trash_resolving_to_the_xdg_trash_is_listed_once(
         self, tmp_path, monkeypatch
     ):

@@ -21,13 +21,21 @@ import type { Route } from '@playwright/test';
  * ACC-SCOPE-88-EMPTY-ALL: the header trash button's dialog lists every source.
  * ACC-SCOPE-87-SECTION-EMPTY: a band's trash button's dialog names its source.
  * ACC-SCOPE-89-BAND-DESIGN: the band stays 21px with and without its button.
- * ACC-SCOPE-93-HOME-EMPTY: the summary bar button's dialog names the XDG trash.
+ * ACC-SCOPE-104-VOLUME-BANDS: with Show Volumes on, the summary bar totals
+ *   every trash; the home band ~ sits under it behind the layout-color3
+ *   divider, folds the main list, and its button's dialog names the XDG trash.
  * ACC-SCOPE-100-MENU-EVERYWHERE: a right-click on the main list's empty space
  *   or on a section band offers Show Volumes.
- * ACC-SCOPE-97-BUTTON-BOX: the band and summary bar trash buttons draw an
- *   18px box with a gap to every edge of the band or bar.
- * ACC-SCOPE-98-TOP-NAME: with Show Volumes on, the summary bar names the XDG
- *   trash.
+ * ACC-SCOPE-97-BUTTON-BOX: the band and home band trash buttons draw an
+ *   18px box with a gap to every edge of the band.
+ * DEF-PANEL-40-EMPTY-DISABLED: a trash button whose trash holds 0 items shows
+ *   disabled, never hidden.
+ * DEF-PANEL-41-SECTION-EMPTY: an expanded band of an empty trash shows the
+ *   Trash is empty line.
+ * ACC-SCOPE-103-HIDE-VOLUMES: while the bands show, the menu entry reads Hide
+ *   Volumes, with no check mark.
+ * ACC-FILTER-105-QUERY: the header filter narrows the rows to the name or
+ *   original path containing the text; clearing brings every row back.
  *
  * Every answer the section UI reads is stubbed with page.route, so the test
  * controls the data and reads nothing from the real trash. The main listing
@@ -51,6 +59,7 @@ interface IStubSource {
   label: string;
   item_count: number;
   total_size: string;
+  total_bytes: number;
   error: string;
 }
 
@@ -73,12 +82,20 @@ interface IStubListing {
 }
 
 const SOURCES: IStubSource[] = [
-  { id: 'xdg', label: 'Trash', item_count: 0, total_size: '0 B', error: '' },
+  {
+    id: 'xdg',
+    label: 'Trash',
+    item_count: 0,
+    total_size: '0 B',
+    total_bytes: 0,
+    error: ''
+  },
   {
     id: 'cache',
     label: '/home/cache',
     item_count: 2,
     total_size: '1.2 MB',
+    total_bytes: 1258291,
     error: ''
   },
   {
@@ -86,6 +103,7 @@ const SOURCES: IStubSource[] = [
     label: '/home/alice',
     item_count: 1,
     total_size: '7 KB',
+    total_bytes: 7168,
     error: ''
   }
 ];
@@ -217,11 +235,11 @@ test('renders one section per source, in server order, with its own count and si
   await openPanel(page);
 
   const sections = page.locator(`${PANEL} .jp-TrashPanel-section[data-source]`);
-  await expect(sections).toHaveCount(2);
+  await expect(sections).toHaveCount(3);
   const order = await sections.evaluateAll(elements =>
     elements.map(element => (element as HTMLElement).dataset.source)
   );
-  expect(order).toEqual(['cache', 'home:alice']);
+  expect(order).toEqual(['xdg', 'cache', 'home:alice']);
 
   // Each header carries its own source's count and size.
   await expect(sectionLabel(page, 'cache')).toHaveText(
@@ -231,22 +249,30 @@ test('renders one section per source, in server order, with its own count and si
     '/home/alice (1 item, 7 KB)'
   );
 
-  // The sections sit below the main listing, which stays the xdg trash.
-  const belowMainList = await page.evaluate(() => {
+  // The home band sits above the main listing, which stays the xdg trash,
+  // and the other sections below it.
+  const placed = await page.evaluate(() => {
     const main = document.querySelector('#jp-trash-panel .jp-TrashPanel-list');
+    const home = document.querySelector(
+      '#jp-trash-panel .jp-TrashPanel-section[data-source="xdg"]'
+    );
     const first = document.querySelector(
-      '#jp-trash-panel .jp-TrashPanel-section'
+      '#jp-trash-panel .jp-TrashPanel-sections .jp-TrashPanel-section'
     );
     return (
       main !== null &&
+      home !== null &&
       first !== null &&
+      (main.compareDocumentPosition(home) &
+        Node.DOCUMENT_POSITION_PRECEDING) !==
+        0 &&
       (main.compareDocumentPosition(first) &
         Node.DOCUMENT_POSITION_FOLLOWING) !==
         0
     );
   });
-  expect(belowMainList).toBe(true);
-  await expect(page.locator(`${PANEL} [data-source="xdg"]`)).toHaveCount(0);
+  expect(placed).toBe(true);
+  await expect(page.locator(`${PANEL} [data-source="xdg"]`)).toHaveCount(1);
   await expect(page.locator(`${PANEL} [data-source="home:bob"]`)).toHaveCount(
     0
   );
@@ -447,12 +473,20 @@ const manyItems = (prefix: string) =>
   );
 
 const LONG_SOURCES: IStubSource[] = [
-  { id: 'xdg', label: 'Trash', item_count: 0, total_size: '0 B', error: '' },
+  {
+    id: 'xdg',
+    label: 'Trash',
+    item_count: 0,
+    total_size: '0 B',
+    total_bytes: 0,
+    error: ''
+  },
   {
     id: 'cache',
     label: '/home/cache',
     item_count: 60,
     total_size: '60 MB',
+    total_bytes: 62914560,
     error: ''
   },
   {
@@ -460,6 +494,7 @@ const LONG_SOURCES: IStubSource[] = [
     label: '/home/alice',
     item_count: 60,
     total_size: '60 KB',
+    total_bytes: 61440,
     error: ''
   }
 ];
@@ -591,6 +626,7 @@ const LOCATION_SOURCES: IStubSource[] = [
     label: '/mnt/data',
     item_count: 1,
     total_size: '3 KB',
+    total_bytes: 3072,
     error: ''
   }
 ];
@@ -627,7 +663,7 @@ test('a location trash is a section after the cache and home sections', async ({
     .evaluateAll(elements =>
       elements.map(element => (element as HTMLElement).dataset.source)
     );
-  expect(order).toEqual(['cache', 'home:alice', LOCATION_ID]);
+  expect(order).toEqual(['xdg', 'cache', 'home:alice', LOCATION_ID]);
   await expect(sectionLabel(page, LOCATION_ID)).toHaveText(
     '/mnt/data (1 item, 3 KB)'
   );
@@ -727,6 +763,9 @@ test('right-click on a cache row restores it with its source', async ({
 const showVolumesItem = (page: IJupyterLabPageFixture) =>
   page.locator('.lm-Menu .lm-Menu-itemLabel', { hasText: /^Show Volumes$/ });
 
+const hideVolumesItem = (page: IJupyterLabPageFixture) =>
+  page.locator('.lm-Menu .lm-Menu-itemLabel', { hasText: /^Hide Volumes$/ });
+
 test('a right-click on the header turns Show Volumes on and the sections show', async ({
   page
 }) => {
@@ -773,13 +812,15 @@ test('with Show Volumes off the xdg and location rows are one list', async ({
 
   // Show Volumes on splits the merged rows: the main list keeps the XDG row
   // and the location row moves to its section; off merges them again.
-  const toggleShowVolumes = async (): Promise<void> => {
+  const toggleShowVolumes = async (
+    item: typeof showVolumesItem
+  ): Promise<void> => {
     await page
       .locator(`${PANEL} .jp-TrashPanel-header`)
       .click({ button: 'right' });
-    await showVolumesItem(page).click();
+    await item(page).click();
   };
-  await toggleShowVolumes();
+  await toggleShowVolumes(showVolumesItem);
   await expect(sectionRows(page, LOCATION_ID)).toHaveCount(1);
   await expect(sectionRows(page, LOCATION_ID)).toContainText('data.csv');
   await expect(items).toHaveCount(1);
@@ -788,7 +829,7 @@ test('with Show Volumes off the xdg and location rows are one list', async ({
     items.and(page.locator(`[data-source="${LOCATION_ID}"]`))
   ).toHaveCount(0);
 
-  await toggleShowVolumes();
+  await toggleShowVolumes(hideVolumesItem);
   await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(0);
   await expect(items).toHaveCount(2);
   await expect(
@@ -822,8 +863,8 @@ test('a right-click on the main list empty space or a section band toggles Show 
   await section(page, 'cache')
     .locator('.jp-TrashPanel-sectionBand')
     .click({ button: 'right' });
-  await expect(showVolumesItem(page)).toBeVisible();
-  await showVolumesItem(page).click();
+  await expect(hideVolumesItem(page)).toBeVisible();
+  await hideVolumesItem(page).click();
   await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(0);
 });
 
@@ -924,8 +965,8 @@ test("a band's trash button names its own source in the dialog", async ({
   await cancelDialog(page);
 });
 
-// ACC-SCOPE-94-EMPTY-FOCUS: a keyboard empty that hides the band button hands
-// the focus to that section's fold toggle, inside the panel.
+// ACC-SCOPE-94-EMPTY-FOCUS: a keyboard empty that disables the band button
+// hands the focus to that section's fold toggle, inside the panel.
 test('a keyboard empty from a band button leaves the focus on its fold toggle', async ({
   page
 }) => {
@@ -956,7 +997,12 @@ test('a keyboard empty from a band button leaves the focus on its fold toggle', 
       body: JSON.stringify([
         SOURCES[0],
         emptied()
-          ? { ...LOCATION_SOURCES[3], item_count: 0, total_size: '0 B' }
+          ? {
+              ...LOCATION_SOURCES[3],
+              item_count: 0,
+              total_size: '0 B',
+              total_bytes: 0
+            }
           : LOCATION_SOURCES[3]
       ])
     })
@@ -980,7 +1026,8 @@ test('a keyboard empty from a band button leaves the focus on its fold toggle', 
 
   await expect.poll(() => bodies.length).toBe(1);
   expect(bodies[0]).toEqual({ scope: 'source', source: LOCATION_ID });
-  await expect(button).toBeHidden();
+  await expect(button).toBeVisible();
+  await expect(button).toBeDisabled();
   await expect(toggle).toBeFocused();
   const focus = await page.evaluate(() => {
     const active = document.activeElement;
@@ -993,29 +1040,42 @@ test('a keyboard empty from a band button leaves the focus on its fold toggle', 
   expect(focus).toEqual({ inPanel: true, onBody: false });
 });
 
-// ACC-SCOPE-93-HOME-EMPTY: with Show Volumes on, the summary bar button empties
-// the XDG trash alone; the bar keeps its height with the button.
-test('the summary bar trash button names the home trash in its dialog', async ({
+// ACC-SCOPE-104-VOLUME-BANDS: with Show Volumes on, the home band button
+// empties the XDG trash alone; the band keeps its height with the button, and
+// the summary bar carries no trash button.
+test('the home band trash button names the home trash in its dialog', async ({
   page
 }) => {
   await showVolumesOn(page);
   await stubMainList(page, [stubItem('main-a.txt', '1 KB')]);
   await stubSources(
     page,
-    [{ ...SOURCES[0], item_count: 1, total_size: '1 KB' }, ...SOURCES.slice(1)],
+    [
+      { ...SOURCES[0], item_count: 1, total_size: '1 KB', total_bytes: 1024 },
+      ...SOURCES.slice(1)
+    ],
     { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
   );
   await page.goto();
   await openPanel(page);
 
-  const bar = page.locator(`${PANEL} .jp-TrashPanel-summary`);
+  const bar = section(page, 'xdg').locator('.jp-TrashPanel-sectionBand');
   const button = bar.locator('.jp-TrashPanel-sectionEmpty');
   await expect(button).toBeVisible();
+  await expect(button).toBeEnabled();
+  await expect(
+    page.locator(`${PANEL} .jp-TrashPanel-summary button`)
+  ).toHaveCount(0);
   const withButton = (await bar.boundingBox())!;
   const box = (await button.boundingBox())!;
-  await button.evaluate(element => ((element as HTMLElement).hidden = true));
+  await button.evaluate(
+    element => ((element as HTMLElement).style.display = 'none')
+  );
   const withoutButton = (await bar.boundingBox())!;
-  await button.evaluate(element => ((element as HTMLElement).hidden = false));
+  await button.evaluate(
+    element => ((element as HTMLElement).style.display = '')
+  );
+  expect(withButton.height).toBeCloseTo(21, 0);
   expect(withButton.height).toBeCloseTo(withoutButton.height, 0);
   expect(box.height).toBeLessThanOrEqual(withButton.height);
   expect(box.x + box.width).toBeLessThan(withButton.x + withButton.width);
@@ -1027,7 +1087,7 @@ test('the summary bar trash button names the home trash in its dialog', async ({
   await cancelDialog(page);
 });
 
-test('a band is 21px with and without its trash button, and the button is no taller', async ({
+test('a band is 21px with an enabled and a disabled trash button, and the button is no taller', async ({
   page
 }) => {
   await showVolumesOn(page);
@@ -1040,6 +1100,7 @@ test('a band is 21px with and without its trash button, and the button is no tal
         label: '/home/bob',
         item_count: 0,
         total_size: '0 B',
+        total_bytes: 0,
         error: ''
       }
     ],
@@ -1053,27 +1114,35 @@ test('a band is 21px with and without its trash button, and the button is no tal
   const button = (id: string) =>
     section(page, id).locator('.jp-TrashPanel-sectionEmpty');
   await expect(button('cache')).toBeVisible();
-  await expect(button('home:bob')).toBeHidden();
+  await expect(button('cache')).toBeEnabled();
+  await expect(button('home:bob')).toBeVisible();
+  await expect(button('home:bob')).toBeDisabled();
 
   const withButton = (await band('cache').boundingBox())!;
-  const withoutButton = (await band('home:bob').boundingBox())!;
+  const withDisabled = (await band('home:bob').boundingBox())!;
   const box = (await button('cache').boundingBox())!;
   expect(withButton.height).toBeCloseTo(21, 0);
-  expect(withoutButton.height).toBeCloseTo(21, 0);
+  expect(withDisabled.height).toBeCloseTo(21, 0);
   expect(box.height).toBeLessThanOrEqual(withButton.height);
 });
 
-// ACC-SCOPE-97-BUTTON-BOX, ACC-SCOPE-98-TOP-NAME
-test('the band and summary bar trash buttons draw an 18px box inside their band or bar, and the summary bar names the XDG trash', async ({
+// ACC-SCOPE-97-BUTTON-BOX, ACC-SCOPE-104-VOLUME-BANDS
+test('the band and home band trash buttons draw an 18px box inside their band, and the home band names the XDG trash', async ({
   page
 }) => {
-  const xdgLabel = '~/.local/share/Trash';
+  const xdgLabel = '~';
   await showVolumesOn(page);
   await stubMainList(page, [stubItem('main-a.txt', '1 KB')]);
   await stubSources(
     page,
     [
-      { ...SOURCES[0], label: xdgLabel, item_count: 1, total_size: '1 KB' },
+      {
+        ...SOURCES[0],
+        label: xdgLabel,
+        item_count: 1,
+        total_size: '1 KB',
+        total_bytes: 1024
+      },
       ...SOURCES.slice(1)
     ],
     { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
@@ -1081,10 +1150,12 @@ test('the band and summary bar trash buttons draw an 18px box inside their band 
   await page.goto();
   await openPanel(page);
 
-  const summaryText = page.locator(`${PANEL} .jp-TrashPanel-summaryText`);
-  await expect(summaryText).toHaveText(`${xdgLabel} \u00B7 1 item \u00B7 1 KB`);
+  // The summary bar keeps the total of every trash, with no label
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-summaryText`)).toHaveText(
+    '4 items \u00B7 1.2 MB'
+  );
   await expect(
-    summaryText.locator('.jp-TrashPanel-sectionText')
+    sectionLabel(page, 'xdg').locator('.jp-TrashPanel-sectionText')
   ).toHaveAttribute('title', xdgLabel);
 
   type Box = { x: number; y: number; width: number; height: number };
@@ -1111,11 +1182,14 @@ test('the band and summary bar trash buttons draw an 18px box inside their band 
   expect(bandBox.height).toBeCloseTo(21, 0);
   expectInside((await bandButton.boundingBox())!, bandBox);
 
-  const bar = page.locator(`${PANEL} .jp-TrashPanel-summary`);
-  const barButton = bar.locator('.jp-TrashPanel-sectionEmpty');
-  await barButton.hover();
-  await expect(barButton).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  expectInside((await barButton.boundingBox())!, (await bar.boundingBox())!);
+  const home = section(page, 'xdg').locator('.jp-TrashPanel-sectionBand');
+  const homeButton = home.locator('.jp-TrashPanel-sectionEmpty');
+  await homeButton.hover();
+  await expect(homeButton).not.toHaveCSS(
+    'background-color',
+    'rgba(0, 0, 0, 0)'
+  );
+  expectInside((await homeButton.boundingBox())!, (await home.boundingBox())!);
 });
 
 // ACC-SCOPE-95-BAND-LINE: at 280px a long label takes the ellipsis and keeps
@@ -1128,7 +1202,17 @@ test('a band with a long label stays one 21px line at 280px and keeps its count'
   await showVolumesOn(page);
   await stubSources(
     page,
-    [...SOURCES, { id, label, item_count: 1, total_size: '3 KB', error: '' }],
+    [
+      ...SOURCES,
+      {
+        id,
+        label,
+        item_count: 1,
+        total_size: '3 KB',
+        total_bytes: 3072,
+        error: ''
+      }
+    ],
     { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS, [id]: [LOCATION_ITEM] }
   );
   await page.goto();
@@ -1281,4 +1365,301 @@ test('Delete from a mouse-opened menu in a scrolled list keeps the scroll and ac
       )!.scrollTop
   );
   expect(Math.abs(scrollTop - picked.scrollTop)).toBeLessThanOrEqual(1);
+});
+
+// DEF-PANEL-40-EMPTY-DISABLED: the header trash button stays, disabled, in the
+// design system's disabled state, with no danger hover
+test('with every trash empty the header trash button is visible and disabled', async ({
+  page
+}) => {
+  await stubMainList(page, []);
+  await stubSources(page, [SOURCES[0]], {});
+  await page.goto();
+  await openPanel(page);
+
+  const button = page.locator(`${PANEL} .jp-TrashPanel-header-button-danger`);
+  await expect(button).toBeVisible();
+  await expect(button).toBeDisabled();
+  await expect(button).toHaveAttribute('title', 'Empty Trash');
+  await expect(button).toHaveCSS('opacity', '0.4');
+  await button.hover();
+  await expect(button).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+});
+
+// DEF-PANEL-40-EMPTY-DISABLED, DEF-PANEL-41-SECTION-EMPTY
+test('with Show Volumes on, an empty location band shows Trash is empty and its trash button is disabled', async ({
+  page
+}) => {
+  await showVolumesOn(page);
+  await stubSources(
+    page,
+    [
+      SOURCES[0],
+      {
+        ...LOCATION_SOURCES[3],
+        item_count: 0,
+        total_size: '0 B',
+        total_bytes: 0
+      }
+    ],
+    { [LOCATION_ID]: [] }
+  );
+  await page.goto();
+  await openPanel(page);
+
+  const line = section(page, LOCATION_ID).locator('.jp-TrashPanel-empty');
+  await expect(line).toBeVisible();
+  await expect(line).toHaveText('Trash is empty');
+  await expect(line).toHaveCSS('font-style', 'italic');
+  const button = section(page, LOCATION_ID).locator(
+    '.jp-TrashPanel-sectionEmpty'
+  );
+  await expect(button).toBeVisible();
+  await expect(button).toBeDisabled();
+
+  // A folded band shows no line
+  await sectionHeader(page, LOCATION_ID).click();
+  await expect(line).toBeHidden();
+});
+
+// ACC-SCOPE-103-HIDE-VOLUMES
+test('the panel right-click menu reads Hide Volumes, choosing it hides the bands and the next right-click reads Show Volumes', async ({
+  page
+}) => {
+  await showVolumesOn(page);
+  await stubSources(page, SOURCES, {
+    cache: CACHE_ITEMS,
+    'home:alice': ALICE_ITEMS
+  });
+  await page.goto();
+  await openPanel(page);
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(3);
+
+  const header = page.locator(`${PANEL} .jp-TrashPanel-header`);
+  await header.click({ button: 'right' });
+  await expect(hideVolumesItem(page)).toBeVisible();
+  await expect(showVolumesItem(page)).toHaveCount(0);
+  await expect(
+    page.locator('.lm-Menu .lm-Menu-item.lm-mod-toggled')
+  ).toHaveCount(0);
+  await hideVolumesItem(page).click();
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(0);
+
+  await header.click({ button: 'right' });
+  await expect(showVolumesItem(page)).toBeVisible();
+  await expect(hideVolumesItem(page)).toHaveCount(0);
+  await page.keyboard.press('Escape');
+});
+
+// ACC-SCOPE-104-VOLUME-BANDS: under the total line the home band ~ sits behind
+// the layout-color3 divider, one 21px line, and folds the main list
+test('the home band sits under the summary bar behind a layout-color3 line, folds the main list, and the bar totals the band counts', async ({
+  page
+}) => {
+  await showVolumesOn(page);
+  await stubMainList(page, [
+    stubItem('main-a.txt', '1 KB'),
+    stubItem('main-b.txt', '1 KB')
+  ]);
+  await stubSources(
+    page,
+    [
+      {
+        ...SOURCES[0],
+        label: '~',
+        item_count: 2,
+        total_size: '2.0 KB',
+        total_bytes: 2048
+      },
+      ...SOURCES.slice(1)
+    ],
+    { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
+  );
+  await page.goto();
+  await openPanel(page);
+  await expect(sectionLabel(page, 'xdg')).toHaveText('~ (2 items, 2.0 KB)');
+  await expect(sectionRows(page, 'cache')).toHaveCount(2);
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-item`)).toHaveCount(2);
+
+  // The total line is the sum of every band's count
+  const counts = await page
+    .locator(`${PANEL} .jp-TrashPanel-sectionCount`)
+    .allTextContents();
+  const sum = counts.reduce(
+    (total, text) => total + Number(/\((\d+) items?,/.exec(text)![1]),
+    0
+  );
+  expect(counts).toHaveLength(3);
+  expect(sum).toBe(5);
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-summaryText`)).toHaveText(
+    `${sum} items \u00B7 1.2 MB`
+  );
+
+  const geometry = await page.evaluate(() => {
+    const panel = document.querySelector('#jp-trash-panel') as HTMLElement;
+    const bar = panel.querySelector('.jp-TrashPanel-summary') as HTMLElement;
+    const home = panel.querySelector(
+      '.jp-TrashPanel-section[data-source="xdg"]'
+    ) as HTMLElement;
+    const band = home.querySelector(
+      '.jp-TrashPanel-sectionBand'
+    ) as HTMLElement;
+    // The token's computed colour, read from a probe in the panel's theme
+    const probe = document.createElement('div');
+    probe.style.color = 'var(--jp-layout-color3)';
+    panel.appendChild(probe);
+    const expected = getComputedStyle(probe).color;
+    probe.remove();
+    const line = getComputedStyle(home);
+    return {
+      next: bar.nextElementSibling === home,
+      barLine: getComputedStyle(bar).borderBottomWidth,
+      barBottom: bar.getBoundingClientRect().bottom,
+      bandTop: band.getBoundingClientRect().top,
+      bandHeight: band.getBoundingClientRect().height,
+      lineWidth: line.borderTopWidth,
+      lineStyle: line.borderTopStyle,
+      lineColour: line.borderTopColor,
+      expected
+    };
+  });
+  expect(geometry.next).toBe(true);
+  expect(geometry.barLine).toBe('0px');
+  expect(geometry.lineWidth).toBe('1px');
+  expect(geometry.lineStyle).toBe('solid');
+  expect(geometry.lineColour).toBe(geometry.expected);
+  expect(geometry.bandTop - geometry.barBottom).toBeCloseTo(1, 0);
+  expect(geometry.bandHeight).toBeCloseTo(21, 0);
+
+  // Folding hides the main list; the next band moves up under the home band
+  const next = section(page, 'cache');
+  const before = (await next.boundingBox())!;
+  await sectionHeader(page, 'xdg').click();
+  await expect(sectionHeader(page, 'xdg')).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-list`)).toBeHidden();
+  await expect(
+    page.locator(`${PANEL} .jp-TrashPanel-columnHeader`)
+  ).toBeHidden();
+  const home = (await section(page, 'xdg').boundingBox())!;
+  const after = (await next.boundingBox())!;
+  expect(after.y).toBeLessThan(before.y);
+  expect(Math.abs(after.y - (home.y + home.height))).toBeLessThanOrEqual(1);
+  // The folded band draws the line under it
+  await expect(section(page, 'xdg')).toHaveCSS('border-bottom-width', '1px');
+});
+
+/** The computed colour of a theme token, read from a probe in the panel. */
+async function tokenColour(
+  page: IJupyterLabPageFixture,
+  token: string
+): Promise<string> {
+  return page.evaluate(name => {
+    const probe = document.createElement('div');
+    probe.style.color = `var(${name})`;
+    document.querySelector('#jp-trash-panel')!.appendChild(probe);
+    const colour = getComputedStyle(probe).color;
+    probe.remove();
+    return colour;
+  }, token);
+}
+
+// With Show Volumes off the summary bar keeps its line, as before the bands
+test('with Show Volumes off the summary bar draws a 1px border-color2 line under it', async ({
+  page
+}) => {
+  await stubSources(page, SOURCES, {});
+  await page.goto();
+  await openPanel(page);
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(0);
+
+  const bar = page.locator(`${PANEL} .jp-TrashPanel-summary`);
+  await expect(bar).toHaveCSS('border-bottom-width', '1px');
+  await expect(bar).toHaveCSS('border-bottom-style', 'solid');
+  await expect(bar).toHaveCSS(
+    'border-bottom-color',
+    await tokenColour(page, '--jp-border-color2')
+  );
+});
+
+// Dividers of a docked panel: an expanded band that shows no rows and no
+// empty line draws the layout-color3 line above the next band
+test('a band whose listing fails draws a 1px layout-color3 line above the next band', async ({
+  page
+}) => {
+  await showVolumesOn(page);
+  await stubSources(page, SOURCES, {
+    cache: route =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'listing failed' })
+      }),
+    'home:alice': ALICE_ITEMS
+  });
+  await page.goto();
+  await openPanel(page);
+  await expect(sectionLabel(page, 'cache')).toHaveText(/^\/home\/cache: /);
+  await expect(sectionHeader(page, 'cache')).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  );
+  await expect(sectionRows(page, 'cache')).toHaveCount(0);
+  await expect(
+    section(page, 'cache').locator('.jp-TrashPanel-empty')
+  ).toBeHidden();
+
+  const failed = section(page, 'cache');
+  await expect(failed).toHaveCSS('border-bottom-width', '1px');
+  await expect(failed).toHaveCSS('border-bottom-style', 'solid');
+  await expect(failed).toHaveCSS(
+    'border-bottom-color',
+    await tokenColour(page, '--jp-layout-color3')
+  );
+  const band = (await failed
+    .locator('.jp-TrashPanel-sectionBand')
+    .boundingBox())!;
+  const next = (await section(page, 'home:alice')
+    .locator('.jp-TrashPanel-sectionBand')
+    .boundingBox())!;
+  expect(next.y - (band.y + band.height)).toBeCloseTo(1, 0);
+});
+
+// ACC-FILTER-105-QUERY: typing in the header filter narrows the visible rows
+// to the name or original path containing the text, ignoring case; clearing
+// restores every row.
+test('the header filter narrows the main list and clearing restores it', async ({
+  page
+}) => {
+  await stubSources(page, SOURCES, {});
+  await stubMainList(page, [
+    stubItem('alpha.txt', '1 KB'),
+    stubItem('beta.txt', '1 KB'),
+    stubItem('folder-a', '1 KB')
+  ]);
+  await page.goto();
+  await openPanel(page);
+
+  const listRows = page.locator(
+    `${PANEL} .jp-TrashPanel-list .jp-TrashPanel-item`
+  );
+  await expect(listRows).toHaveCount(3);
+
+  await page.locator(`${PANEL} button[title="Filter trash"]`).click();
+  const field = page.getByRole('searchbox', { name: 'Filter trash' });
+  await expect(field).toBeVisible();
+  await field.fill('ALP');
+  await expect(listRows).toHaveCount(1);
+  await expect(listRows.first().locator('.jp-TrashPanel-item-name')).toHaveText(
+    'alpha.txt'
+  );
+  // The summary keeps the unfiltered count
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-summary`)).toContainText(
+    '3 items'
+  );
+
+  await page.locator(`${PANEL} .jp-TrashPanel-filterClear`).click();
+  await expect(listRows).toHaveCount(3);
 });

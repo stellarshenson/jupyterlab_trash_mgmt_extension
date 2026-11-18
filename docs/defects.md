@@ -276,6 +276,55 @@ Lumino widget in `src/widget.ts`
   - root-cause: 2026-11-16T16:06:53Z @kj the dialog returns focus to the list; _reloadChanged drops the removed active row, _activePath becomes null and _restoreActiveRow runs _setActiveIndex(0) with scrollIntoView while the list is :focus-visible
   - log: 2026-11-16T16:06:53Z @kj added
   - log: 2026-11-16T16:37:05Z @kj closed
+- [x] `DEF-PANEL-40-EMPTY-DISABLED` **Trash buttons hide on an empty trash** - MEDIUM; the header trash button and, with Show Volumes on, the summary bar and section band trash buttons disappear while the trash they empty holds 0 items; expected: always shown, disabled at 0 items
+  - evidence: jest 5 green: header, band and home band buttons disabled at 0 items, focus to fold toggle; Galata 4 green incl. empty band button disabled; 81-accept.json passed
+  - overrides: ACC-HEAD-4 - disabled, not hidden, at 0 items
+  - repro: empty every trash: the header trash button is gone; with Show Volumes on, the band of an empty trash has no trash button
+  - test-tags: UNIT, FUNCTIONAL
+  - root-cause: 2026-11-17T20:42:24Z @kj setHidden hides each button at 0 items in _paintEmptyBtn and _paintSection (src/widget.ts:824-863, 1031), as closed ACC-HEAD-4, ACC-SCOPE-87-SECTION-EMPTY, ACC-SCOPE-88-EMPTY-ALL and ACC-SCOPE-93-HOME-EMPTY require; a disabled button also drops the focus, so the ACC-SCOPE-94-EMPTY-FOCUS hand-off stays
+  - log: 2026-11-17T20:41:39Z @kj added
+  - log: 2026-11-17T20:42:24Z @kj root-cause updated "2026-11-17T20:41:39Z @kj setHidden hides each button at 0 items in _paintEmptyBtn and _paintSection (src/widget.ts:824-863, 1031), as closed ACC-HEAD-4, ACC-SCOPE-87, 88 and 93 require; a disabled button also drops the focus, so the ACC-SCOPE-94 hand-off stays" -> "setHidden hides each button at 0 items in _paintEmptyBtn and _paintSection (src/widget.ts:824-863, 1031), as closed ACC-HEAD-4, ACC-SCOPE-87-SECTION-EMPTY, ACC-SCOPE-88-EMPTY-ALL and ACC-SCOPE-93-HOME-EMPTY require; a disabled button also drops the focus, so the ACC-SCOPE-94-EMPTY-FOCUS hand-off stays"
+  - log: 2026-11-17T23:01:59Z @kj closed
+- [x] `DEF-PANEL-41-SECTION-EMPTY` **Empty section shows no Trash is empty line** - MINOR; with Show Volumes on, an expanded section of a trash with 0 items draws nothing under its band; expected: the italic `Trash is empty` line the main list shows
+  - evidence: jest 4 green: Trash is empty under an expanded empty band, absent folded, pending and error; Galata empty location band green; 81-accept.json passed
+  - related: ACC-SCOPE-104-VOLUME-BANDS
+  - repro: Show Volumes on, expand the band of a trash with 0 items: no line under the band
+  - test-tags: UNIT, FUNCTIONAL
+  - root-cause: 2026-11-17T20:41:39Z @kj _paintSection draws one row per listed item and nothing for an empty listing (src/widget.ts:1078-1081); the Trash is empty line exists only for the main list (_emptyMessage, src/widget.ts:434)
+  - log: 2026-11-17T20:41:39Z @kj added
+  - log: 2026-11-17T23:01:59Z @kj closed
+- [x] `DEF-PANEL-42-HOME-LABEL` **Home trash labelled with its trash folder** - MINOR; the XDG trash label reads `~/.local/share/Trash` in the summary bar, tooltips and dialogs; expected `~`, the folder the trash belongs to, as a location trash reads `~/workspace`, not its `.Trash-1000`
+  - evidence: jest 2 green: home band label ~ and tooltip; pytest 3 green: XDG under home labelled ~; Galata 2 green: label ~ and XDG trash dialog; 81-accept.json passed
+  - related: ACC-SCOPE-104-VOLUME-BANDS
+  - repro: Show Volumes on: the summary bar starts with ~/.local/share/Trash
+  - test-tags: UNIT, FUNCTIONAL
+  - root-cause: 2026-11-17T20:42:24Z @kj source_candidates labels the xdg source with source_label(get_trash_dir(), ...) (jupyterlab_trash_mgmt_extension/routes.py:402) instead of the home folder, as closed ACC-SCOPE-98-TOP-NAME requires
+  - log: 2026-11-17T20:41:40Z @kj added
+  - log: 2026-11-17T20:42:24Z @kj root-cause updated "2026-11-17T20:41:40Z @kj source_candidates labels the xdg source with source_label(get_trash_dir(), ...) (jupyterlab_trash_mgmt_extension/routes.py:402) instead of the home folder, as closed ACC-SCOPE-98 requires" -> "source_candidates labels the xdg source with source_label(get_trash_dir(), ...) (jupyterlab_trash_mgmt_extension/routes.py:402) instead of the home folder, as closed ACC-SCOPE-98-TOP-NAME requires"
+  - log: 2026-11-17T23:01:59Z @kj closed
+- [x] `DEF-PANEL-43-STALE-COUNT` **Band count stale after Restore or Delete** - MINOR; with Show Volumes on, after Restore or Delete the total line, the band count and size and the band trash button keep their old values until /sources answers; expected: they drop with the removed rows at once (owner decision on review round 1)
+  - evidence: jest 2 green: delete of the only band row sets count, button and total before /sources answers; Galata none; 81-accept.json passed
+  - related: ACC-SCOPE-104-VOLUME-BANDS
+  - repro: Show Volumes on, hold /sources, delete the only row of a band: the band still counts it and its trash button stays enabled
+  - test-tags: UNIT
+  - root-cause: 2026-11-17T22:07:53Z @kj _reloadChanged strips removed rows from the listings but not from _sources (src/widget.ts:1887-1894), which the total line and the band buttons read
+  - log: 2026-11-17T22:07:53Z @kj added
+  - log: 2026-11-17T23:01:59Z @kj closed
+- [x] `DEF-PANEL-44-MENU-FOCUS` **Focus lost after a menu on a disabled button** - MINOR; a mouse right-click on a disabled band trash button, then Escape, leaves the keyboard focus on the page body; expected: the focus returns to that band's fold toggle, as after every panel menu (owner decision on review round 1)
+  - evidence: jest 2 green: Escape from a disabled band button menu focuses the fold toggle; Escape from the disabled header button menu focuses refresh; 81-accept.json passed
+  - related: ACC-SCOPE-100-MENU-EVERYWHERE
+  - repro: Show Volumes on, right-click the dimmed trash button of an empty band, press Escape, then Tab: the focus starts from the page body
+  - test-tags: UNIT
+  - root-cause: 2026-11-17T22:07:54Z @kj a disabled button cannot take the focus, and the panel menu's close handler returns the focus to the right-clicked element only
+  - log: 2026-11-17T22:07:54Z @kj added
+  - log: 2026-11-17T23:01:59Z @kj closed
+- [x] `DEF-PANEL-45-TRASH-PUT` **Trashed files absent from the panel** - MAJOR; files removed with trash-put under ~/.claude did not appear in the Trash panel while they were in the XDG trash; expected: every XDG trash entry lists as a row
+  - evidence: reload after make install 1.1.30 loaded jupyterlab_trash_mgmt_extension; a control trash-put file appeared in the live /list answer (count 71); the three original files were restored at 23:52
+  - repro: trash-put a file under ~/.claude; open the Trash panel; the entry is missing
+  - root-cause: 2026-11-17T22:56:44Z @kj likely cause: the running JupyterLab started 2026-11-15 20:04, before core patches 1.0.37 (installed 2026-11-16 13:16) and trash extension 1.1.29 (installed 2026-11-17 23:51); the loaded file remover is stale. The three files were in the home trash from 23:50:34 to 23:52, then restored on request, which removed them
+  - root-cause: 2026-11-17T22:55:44Z @kj cause unknown; the three entries were in the trash from 23:50:34 to 23:52 on 2026-11-17, then restored on request, so the observation window is closed; a control trash-put entry tests the panel
+  - log: 2026-11-17T22:55:44Z @kj added
+  - log: 2026-11-18T06:57:46Z @kj closed
 
 ## Test suite `TEST`
 

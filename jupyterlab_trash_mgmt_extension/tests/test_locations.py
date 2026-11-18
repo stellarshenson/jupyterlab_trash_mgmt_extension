@@ -198,7 +198,7 @@ class TestSourceLabels:
         inside_trash = dash_trash(inside)
         outside_trash = dash_trash(outside)
         expected = [
-            ("xdg", "~/.local/share/Trash"),
+            ("xdg", "~"),
             ("cache", str(cache)),
             (source_id(inside_trash), "~/nas"),
             (source_id(outside_trash), str(outside)),
@@ -306,7 +306,7 @@ class TestLocationRestore:
         assert not (nas["trash"] / "files" / "b.txt").exists()
         assert not (nas["trash"] / "info" / "b.txt.trashinfo").exists()
         sources = await fetch_json(jp_fetch, "sources")
-        assert [(s["id"], s["item_count"]) for s in sources] == [(nas["id"], 0)]
+        assert [(s["id"], s["item_count"]) for s in sources] == [("xdg", 0), (nas["id"], 0)]
 
     async def test_existing_destination_is_409_and_keeps_the_item(self, jp_fetch, nas):
         target = nas["location"] / "a" / "b.txt"

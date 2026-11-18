@@ -29,6 +29,7 @@ Title row, action icons and summary bar of the trash panel
   - log: 2026-10-13T21:21:24Z @kj added
   - log: 2026-10-13T23:27:12Z @kj closed
 - [x] `ACC-HEAD-4` **Empty Trash hidden on empty trash** - MEDIUM; `Empty Trash` button is hidden while the trash holds 0 items
+  - overridden-by: DEF-PANEL-40-EMPTY-DISABLED
   - evidence: jest `header > hides Empty Trash while the trash holds no item` passes; in the browser the button has `display: none` after Empty Trash; jest 49 passed on 2026-10-14
   - test: load a top-level list with 0 items, assert the button is hidden
   - test-tags: UNIT
@@ -624,6 +625,7 @@ Additional trash sources shown below the main list, their collapsible sections, 
 - [x] `ACC-SCOPE-86-SHOW-VOLUMES` **Source sections hidden until Show Volumes is checked** - HIGH; right-click on the panel header opens a menu with a checkable Show Volumes entry, also in the command palette under Trash; off by default; while off, no source section is drawn below the main list; checking it draws them; the choice survives a reload
   - evidence: jest 'draws the sections when run, saves the choice, and a new widget starts with it on', off-while-unset it.each; index.spec palette entry; Galata 'a right-click on the header turns Show Volumes on and the sections show'; Galata 23/23 wf_b1e89586-3c0
   - related: ACC-SCOPE-67-SOURCES, ACC-SCOPE-76-LOCATION-TRASH, ACC-SCOPE-82-SECTION-SHARE - these sections now show only while Show Volumes is checked
+  - overridden-by: ACC-SCOPE-103-HIDE-VOLUMES
   - test: jest: no sections by default; the header menu holds Show Volumes unchecked; running it draws the sections and a new widget keeps them; Galata: right-click the header, click Show Volumes, a section shows
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-11-16T05:23:32Z @kj added
@@ -652,6 +654,7 @@ Additional trash sources shown below the main list, their collapsible sections, 
 - [x] `ACC-SCOPE-90-MERGED-LIST` **Main list merges every source while Show Volumes is off** - HIGH; while Show Volumes is off, the main list holds the top-level items of every source in the current sort; the summary bar counts and sizes them all; each source's rows join as it answers; one name in two sources gives two rows; while on, only the XDG trash
   - evidence: jest 'merges a location answering later into the sorted main list and sums the summary', XDG-only main list while on; Galata 'with Show Volumes off the xdg and location rows are one list' (split on, merged again off); Galata 20/20 wf_0d3f238d-fe5
   - related: ACC-SCOPE-86-SHOW-VOLUMES, ACC-HEAD-5 - the summary bar sums every source while the list is merged, ACC-SCOPE-74-STREAM
+  - overridden-by: ACC-SCOPE-104-VOLUME-BANDS
   - test: jest: stub xdg and a location answering later; off: rows of both in one sorted list, summary sums them, a shared name gives two rows; on: xdg rows only; Galata: stubbed sources, merged rows split on Show Volumes
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-11-16T05:32:42Z @kj added
@@ -676,6 +679,7 @@ Additional trash sources shown below the main list, their collapsible sections, 
 - [x] `ACC-SCOPE-93-HOME-EMPTY` **Home trash has its own empty button** - HIGH; while Show Volumes is on, the summary bar of the main list carries a trash button that empties only the XDG trash, after a confirmation naming it with its count and size; hidden at 0 items and while Show Volumes is off
   - evidence: jest 'with Show Volumes on, the summary bar button posts scope source xdg after a dialog naming the XDG trash', hidden at 0 items and while off; Galata 'the summary bar trash button names the home trash in its dialog'; Galata 23/23 wf_b1e89586-3c0
   - related: ACC-SCOPE-87-SECTION-EMPTY, ACC-SCOPE-88-EMPTY-ALL
+  - overridden-by: ACC-SCOPE-104-VOLUME-BANDS
   - test: jest: Show Volumes on, the summary button empties only xdg after the dialog; hidden at 0 items and with Show Volumes off; Galata: click it, the dialog names the home trash
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-11-16T07:01:31Z @kj added
@@ -712,6 +716,7 @@ Additional trash sources shown below the main list, their collapsible sections, 
 - [x] `ACC-SCOPE-98-TOP-NAME` **Top section names its trash** - MEDIUM; with Show Volumes on, the main list's summary bar starts with the XDG trash label, its folder (~/.local/share/Trash by default), before the count and size, in the band label style; the same label names it in dialogs and tooltips; with Show Volumes off the summary bar is unchanged
   - evidence: jest summary text starts with the XDG label with Show Volumes on, count and size only when off; pytest xdg label ~/.local/share/Trash; Galata :1067; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
   - related: DEF-PANEL-36-TOP-NAME, ACC-SCOPE-93-HOME-EMPTY - names the trash the summary bar button empties
+  - overridden-by: ACC-SCOPE-104-VOLUME-BANDS
   - test: jest: Show Volumes on, summary text starts with ~/.local/share/Trash; off, count and size only; Galata: Show Volumes on, the summary bar shows the label
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-11-16T12:22:47Z @kj added
@@ -728,6 +733,7 @@ Additional trash sources shown below the main list, their collapsible sections, 
 - [x] `ACC-SCOPE-100-MENU-EVERYWHERE` **Show Volumes in every panel right-click** - MEDIUM; a right-click anywhere in the panel offers the checkable Show Volumes entry: header, summary bar, main list rows and empty space, every section band and section row; in a row menu it follows the row actions after a separator; a plain right-click in the panel never opens the browser menu; keyboard focus never falls to the page body after the menu
   - evidence: jest 'Show Volumes in every right-click' 7 targets, row menus end with separator and Show Volumes, 8 focus cases; Galata :799 menu toggles, :1165 Escape focuses list without outline; slow suite wf_3468b05d-fc8 Galata 28/28 r0, jest 167, pytest 131; review r4 SHIP wf_08f01dc3-4d8
   - related: DEF-PANEL-38-MENU-BODY, ACC-SCOPE-86-SHOW-VOLUMES - the header menu entry, now in every panel menu
+  - overridden-by: ACC-SCOPE-103-HIDE-VOLUMES
   - test: Galata: Show Volumes off, right-click main list empty space, check Show Volumes, sections show; right-click a section band, uncheck it, sections hide; jest: row menus end with a separator and Show Volumes
   - test-tags: UNIT, FUNCTIONAL
   - log: 2026-11-16T12:22:52Z @kj added
@@ -741,4 +747,37 @@ Additional trash sources shown below the main list, their collapsible sections, 
   - test-tags: UNIT
   - log: 2026-11-16T12:22:52Z @kj added
   - log: 2026-11-16T16:37:05Z @kj closed
+- [x] `ACC-SCOPE-103-HIDE-VOLUMES` **Menu entry reads Hide Volumes while volumes show** - LOW; while Show Volumes is on, the panel right-click entry and the palette command under Trash read Hide Volumes with no check mark; while off they read Show Volumes; the command id trash:show-volumes and the remembered choice are unchanged
+  - evidence: jest 2 green: Hide Volumes label, no check mark, redraw on flip; Galata 4 green: Show/Hide Volumes and merged list; 81-accept.json passed
+  - overrides: ACC-SCOPE-86-SHOW-VOLUMES - the entry reads Hide Volumes while on, no check mark
+  - overrides: ACC-SCOPE-100-MENU-EVERYWHERE - the entry reads Hide Volumes while on, no check mark
+  - test: turn Show Volumes on, right-click the panel: the entry reads Hide Volumes, no check mark; choose it: the sections go and the entry reads Show Volumes
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-11-17T20:42:41Z @kj the command label follows widget.showVolumes; isToggled is removed
+  - log: 2026-11-17T20:42:41Z @kj added
+  - log: 2026-11-17T23:01:59Z @kj closed
+- [x] `ACC-SCOPE-104-VOLUME-BANDS` **Show Volumes adds a band per trash below the total line** - MEDIUM; with Show Volumes on, the summary bar totals every trash, as with it off; below it each trash is a foldable band, the home trash `~` first, holding the main list's rows; the first band is separated from the summary bar by the design-system divider; no row shows twice
+  - evidence: jest 6 green: home band order, summary totals, fold persistence, xdg scope; pytest 3 green; Galata 5 green: home band placement and counts; 81-accept.json passed
+  - overrides: ACC-SCOPE-98-TOP-NAME - the home trash is named on its own band, the summary bar keeps the total
+  - overrides: ACC-SCOPE-93-HOME-EMPTY - the home trash button moves to the ~ band
+  - overrides: ACC-SCOPE-90-MERGED-LIST - while on, the summary bar totals every trash and the ~ band holds the XDG rows
+  - test: Show Volumes on, items in ~ and ~/workspace: summary bar shows both totals; bands ~ then ~/workspace follow, each folds; the ~ band holds the home rows; a divider sits above it
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-11-17T20:44:04Z @kj a band like the section bands sits above the main list's column header; folding it hides the column header and the list; its fold state is kept with the other bands under id xdg; divider per the jupyterlab-extension rule Dividers of a docked panel
+  - log: 2026-11-17T20:44:04Z @kj added
+  - log: 2026-11-17T23:02:00Z @kj closed
+
+## List filter `FILTER`
+
+Finding a file or folder in the trash list by name or path
+
+- log: 2026-11-17T22:53:39Z @kj category created
+
+- [x] `ACC-FILTER-105-QUERY` **Filter the trash list** - MEDIUM; typing in the panel's filter narrows the visible rows to the files and folders whose name or original path contains the text, ignoring case
+  - evidence: jest filter 8 cases green (name, original_path, clear, empty line, focus, sections, hidden selection, caret); Galata 'the header filter narrows the main list and clearing restores it' green at retry 0; accept 81-accept.json passed
+  - test: jest: stub rows alpha.txt, beta.txt and folder-a; type alp into the filter; only alpha.txt shows; clear; every row returns
+  - test-tags: UNIT, FUNCTIONAL
+  - mechanism: 2026-11-17T22:53:39Z @kj filter button in the header toggles an input type=search with a clear button, as the AI code assistants and passkey panels; input re-renders the main list and every section matching name or original path, ignoring case; hiding the field clears the query
+  - log: 2026-11-17T22:53:39Z @kj added
+  - log: 2026-11-18T00:17:52Z @kj closed
 
