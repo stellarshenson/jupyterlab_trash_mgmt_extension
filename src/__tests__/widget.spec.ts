@@ -266,6 +266,7 @@ interface ISource {
   total_size: string;
   total_bytes: number;
   error: string;
+  mountpoint: string;
 }
 
 /** Build a `sources` response entry the way the server shapes it. */
@@ -289,7 +290,8 @@ function sourceOf(
     item_count: itemCount,
     total_size: totalSize,
     total_bytes: 0,
-    error
+    error,
+    mountpoint: '/'
   };
 }
 
@@ -2105,9 +2107,25 @@ describe('trash sources', () => {
     const ellipsis = [textStyle.textOverflow, textStyle.whiteSpace];
     style.remove();
 
-    expect(text.title).toBe('/home/cache');
+    expect(text.title).toBe('/home/cache on /');
     expect(wrap).not.toBe('wrap');
     expect(ellipsis).toEqual(['ellipsis', 'nowrap']);
+  });
+
+  // ACC-BANDS-111-TRASH-TIP: the tooltip names the volume, not the label, so
+  // two trashes whose labels look alike still name different volumes.
+  it('titles the band with the mountpoint of the volume holding its trash', async () => {
+    const routes = sourcedRoutes();
+    routes.sources = [
+      sourceOf('xdg', 1, '5 B'),
+      { ...sourceOf('cache', 12, '40 MB'), mountpoint: '/mnt/data' }
+    ];
+    const widget = await open(routes);
+    const text = sectionLabel(widget, 'cache').querySelector<HTMLElement>(
+      ':scope > .jp-TrashPanel-sectionText'
+    )!;
+
+    expect(text.title).toBe('/home/cache on /mnt/data');
   });
 
   it('the open section takes its content height and the next band follows it', async () => {
@@ -4000,7 +4018,7 @@ describe('trash buttons', () => {
       ':scope > .jp-TrashPanel-sectionText'
     )!;
     expect(label.textContent).toBe(XDG_LABEL);
-    expect(label.title).toBe(XDG_LABEL);
+    expect(label.title).toBe(`${XDG_LABEL} on /`);
     expect(
       band.querySelector(':scope > .jp-TrashPanel-sectionCount')!.textContent
     ).toBe(' (1 item, 5 B)');

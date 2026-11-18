@@ -339,6 +339,13 @@ Lumino widget in `src/widget.ts`
   - root-cause: 2026-11-17T22:55:44Z @kj cause unknown; the three entries were in the trash from 23:50:34 to 23:52 on 2026-11-17, then restored on request, so the observation window is closed; a control trash-put entry tests the panel
   - log: 2026-11-17T22:55:44Z @kj added
   - log: 2026-11-18T06:57:46Z @kj closed
+- [x] `DEF-PANEL-48-FOLD-SCROLLBAR` **the empty section shows a scrollbar during the harmonica fold** - MINOR; During the harmonica fold the leaving entries box shrinks below its content, so the browser draws a scrollbar although the rows are pinned and the trash is empty. The bar lasts for the fold and vanishes at its end.
+  - evidence: The Galata case 'the fold draws no scrollbar on the leaving empty section' passes at retry 0 in the full 39-case suite at 1.1.35, and the served bundle carries scrollbar-color: transparent transparent on jp-mod-animating.
+  - repro: Show Volumes on, HOME and WORKSPACE empty: wheel two 100px notches from HOME; the leaving band draws a scrollbar during the 400ms fold.
+  - test-tags: FUNCTIONAL
+  - root-cause: 2026-11-18T17:46:37Z @kj The entries box is overflow-y auto with an inline height that animates below scrollHeight, so the browser draws a scrollbar for the pinned box.
+  - log: 2026-11-18T17:46:37Z @kj added
+  - log: 2026-11-18T18:53:53Z @kj closed
 
 ## Test suite `TEST`
 

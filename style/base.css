@@ -471,9 +471,12 @@
   display: none;
 }
 
-/* While the controller sets inline heights the box keeps them */
+/* While the controller sets inline heights the box keeps them. DEF-PANEL-48:
+   the pull and the fold keep the box shorter than its rows, so the bar is
+   hidden while the rows are pinned. */
 .jp-TrashPanel-sectionEntries.jp-mod-animating {
   flex: 0 0 auto;
+  scrollbar-color: transparent transparent;
 }
 
 /* The home entries box's breadcrumb and sort headers stay over a scrolled

@@ -67,6 +67,7 @@ interface IStubSource {
   total_size: string;
   total_bytes: number;
   error: string;
+  mountpoint: string;
 }
 
 interface IStubItem {
@@ -94,7 +95,8 @@ const SOURCES: IStubSource[] = [
     item_count: 0,
     total_size: '0 B',
     total_bytes: 0,
-    error: ''
+    error: '',
+    mountpoint: '/'
   },
   {
     id: 'cache',
@@ -102,7 +104,8 @@ const SOURCES: IStubSource[] = [
     item_count: 2,
     total_size: '1.2 MB',
     total_bytes: 1258291,
-    error: ''
+    error: '',
+    mountpoint: '/'
   },
   {
     id: 'home:alice',
@@ -110,7 +113,8 @@ const SOURCES: IStubSource[] = [
     item_count: 1,
     total_size: '7 KB',
     total_bytes: 7168,
-    error: ''
+    error: '',
+    mountpoint: '/home'
   }
 ];
 
@@ -308,6 +312,28 @@ test('renders one section per source, in server order, with its own count and si
     );
   });
   expect(occurrences).toEqual([1, 1]);
+});
+
+// ACC-BANDS-111-TRASH-TIP: the band tooltip names the mountpoint of the
+// volume that holds the band's trash folder, after the label.
+test('the band tooltip names the mountpoint of the volume holding its trash', async ({
+  page
+}) => {
+  const mountpoint = '/mnt/lab-home';
+  await showVolumesOn(page);
+  await stubMainList(page, []);
+  await stubSources(
+    page,
+    [{ ...SOURCES[0], mountpoint }, SOURCES[1], SOURCES[2]],
+    { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
+  );
+  await page.goto();
+  await openPanel(page);
+
+  const title = await sectionLabel(page, 'xdg')
+    .locator('.jp-TrashPanel-sectionText')
+    .getAttribute('title');
+  expect(title?.endsWith(` on ${mountpoint}`)).toBe(true);
 });
 
 test('a header click opens a folded section and folds the open one, and the state survives a reload', async ({
@@ -530,7 +556,8 @@ const LONG_SOURCES: IStubSource[] = [
     item_count: 0,
     total_size: '0 B',
     total_bytes: 0,
-    error: ''
+    error: '',
+    mountpoint: '/'
   },
   {
     id: 'cache',
@@ -538,7 +565,8 @@ const LONG_SOURCES: IStubSource[] = [
     item_count: 60,
     total_size: '60 MB',
     total_bytes: 62914560,
-    error: ''
+    error: '',
+    mountpoint: '/'
   },
   {
     id: 'home:alice',
@@ -546,7 +574,8 @@ const LONG_SOURCES: IStubSource[] = [
     item_count: 60,
     total_size: '60 KB',
     total_bytes: 61440,
-    error: ''
+    error: '',
+    mountpoint: '/home'
   }
 ];
 
@@ -809,6 +838,72 @@ test('the wheel folds the open band at its end and short bands stack under it', 
   expect(Math.abs(aliceTop)).toBeLessThanOrEqual(1);
 });
 
+// DEF-PANEL-48-FOLD-SCROLLBAR: the pull and the fold hold the entries box
+// shorter than its rows, so the browser would draw a scrollbar over rows that
+// are pinned; both trading boxes hide the bar while the animating class is on.
+test('the fold draws no scrollbar on the leaving empty section', async ({
+  page
+}) => {
+  await showVolumesOn(page);
+  await stubMainList(page, []);
+  await stubSources(
+    page,
+    [
+      { ...SOURCES[0], item_count: 0, total_size: '0 B', total_bytes: 0 },
+      { ...SOURCES[1], item_count: 0, total_size: '0 B', total_bytes: 0 },
+      SOURCES[2]
+    ],
+    { cache: [], 'home:alice': ALICE_ITEMS }
+  );
+  await page.goto();
+  await openPanel(page);
+
+  // At rest the open home box carries the theme's scrollbar pair
+  const atRest = await sectionEntries(page, 'xdg').evaluate(
+    (entries: HTMLElement) => getComputedStyle(entries).scrollbarColor
+  );
+  expect(atRest).not.toBe('rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)');
+
+  // The empty open box is 24px and its give length is half of it, so the first
+  // 100px notch already folds it into the cache band
+  const bar = page.locator(`${PANEL} .jp-TrashPanel-summary`);
+  await bar.hover();
+  await page.mouse.wheel(0, 100);
+  await page.mouse.wheel(0, 100);
+  await page.waitForTimeout(60);
+
+  // The fold trades the leaving home box and the entering cache box; both are
+  // shorter than their rows, so both carry the class and neither draws its bar
+  const during = await page.evaluate(() => {
+    const boxes = Array.from(
+      document.querySelectorAll('#jp-trash-panel .jp-TrashPanel-sectionEntries')
+    ) as HTMLElement[];
+    return boxes.map(entries => ({
+      id: entries
+        .closest('.jp-TrashPanel-section')
+        ?.getAttribute('data-source'),
+      classes: Array.from(entries.classList),
+      color: getComputedStyle(entries).scrollbarColor,
+      thumb: getComputedStyle(entries, '::-webkit-scrollbar-thumb')
+        .backgroundColor
+    }));
+  });
+  const animating = during.filter(box =>
+    box.classes.includes('jp-mod-animating')
+  );
+  expect(animating.map(box => box.id)).toEqual(['xdg', 'cache']);
+  for (const box of animating) {
+    expect(box.color).toBe('rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)');
+    expect(box.thumb).toBe('rgba(0, 0, 0, 0)');
+  }
+
+  await page.waitForTimeout(500);
+  await expect(sectionHeader(page, 'cache')).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  );
+});
+
 // ACC-BANDS-108-STACK: a panel shorter than its static bands scrolls the
 // column, so every band stays reachable; the wheel keeps the native scroll
 // instead of folding.
@@ -828,7 +923,8 @@ test('a dozen bands in a short panel scroll the column instead of clipping', asy
       item_count: 0,
       total_size: '0 B',
       total_bytes: 0,
-      error: ''
+      error: '',
+      mountpoint: '/home'
     }))
   ];
   await showVolumesOn(page);
@@ -929,7 +1025,8 @@ const LOCATION_SOURCES: IStubSource[] = [
     item_count: 1,
     total_size: '3 KB',
     total_bytes: 3072,
-    error: ''
+    error: '',
+    mountpoint: '/mnt/data'
   }
 ];
 const LOCATION_ITEM: IStubItem = {
@@ -1460,7 +1557,8 @@ test('a band is 21px with an enabled and a disabled trash button, and the button
         item_count: 0,
         total_size: '0 B',
         total_bytes: 0,
-        error: ''
+        error: '',
+        mountpoint: '/home'
       }
     ],
     { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
@@ -1515,7 +1613,7 @@ test('the band and home band trash buttons draw an 18px box inside their band, a
   );
   await expect(
     sectionLabel(page, 'xdg').locator('.jp-TrashPanel-sectionText')
-  ).toHaveAttribute('title', xdgLabel);
+  ).toHaveAttribute('title', `${xdgLabel} on /`);
 
   type Box = { x: number; y: number; width: number; height: number };
   const expectInside = (box: Box, outer: Box): void => {
@@ -1569,7 +1667,8 @@ test('a band with a long label stays one 21px line at 280px and keeps its count'
         item_count: 1,
         total_size: '3 KB',
         total_bytes: 3072,
-        error: ''
+        error: '',
+        mountpoint: '/mnt/a-very-long-network-volume-name'
       }
     ],
     { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS, [id]: [LOCATION_ITEM] }
@@ -1585,7 +1684,10 @@ test('a band with a long label stays one 21px line at 280px and keeps its count'
   });
   const text = sectionLabel(page, id).locator('.jp-TrashPanel-sectionText');
   const count = sectionLabel(page, id).locator('.jp-TrashPanel-sectionCount');
-  await expect(text).toHaveAttribute('title', label);
+  await expect(text).toHaveAttribute(
+    'title',
+    `${label} on /mnt/a-very-long-network-volume-name`
+  );
   await expect(count).toBeVisible();
 
   const band = (await section(page, id)

@@ -186,6 +186,7 @@ interface ITrashSource {
   total_size: string;
   total_bytes: number;
   error: string;
+  mountpoint: string;
 }
 
 interface ICleanSourceResult {
@@ -1680,7 +1681,8 @@ export class TrashWidget extends Widget {
       ? trans.__('%1: %2', source.label, error)
       : source.label;
     // The ellipsis can hide the label's end; the tooltip carries all of it
-    text.title = text.textContent;
+    // and names the volume holding the trash
+    text.title = trans.__('%1 on %2', text.textContent, source.mountpoint);
     if (error) {
       parts.label.replaceChildren(text);
       parts.list?.replaceChildren();

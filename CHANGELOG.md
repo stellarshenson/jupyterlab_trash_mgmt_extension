@@ -2,6 +2,16 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.36] - 2026-11-18
+
+### Added
+
+- A section band's label tooltip names the mountpoint of the volume holding that band's trash, as `HOME on /home` and `WORKSPACE on /home`; the server resolves it from the trash folder's nearest mount
+
+### Fixed
+
+- The entries box draws no scrollbar during the harmonica pull or fold, when its height is shorter than its rows; an empty trash no longer shows a bar while the bands trade heights
+
 ## [1.1.35] - 2026-11-18
 
 ### Changed

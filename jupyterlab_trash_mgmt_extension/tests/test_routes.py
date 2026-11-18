@@ -627,6 +627,43 @@ class TestTrashSources:
         ]
         assert [source["total_size"] for source in sources] == ["12 B", "0 B"]
 
+    def test_every_source_carries_the_mountpoint_of_its_trash_volume(
+        self, trash_dir, tmp_path, monkeypatch
+    ):
+        """ACC-BANDS-111-TRASH-TIP: each source names the volume holding its trash."""
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        cache = make_trash(homes / "cache")
+        location = tmp_path / "nas"
+        location_trash = make_trash(location / f".Trash-{os.getuid()}")
+
+        sources = collect_sources([str(location)])
+        directories = {
+            "xdg": trash_dir,
+            "cache": cache,
+            f"location:{location_trash}": location_trash,
+        }
+
+        def mountpoint_of(path):
+            path = Path(os.path.realpath(path))
+            while not os.path.ismount(path):
+                path = path.parent
+            return path
+
+        for source in sources:
+            trash = Path(os.path.realpath(directories[source["id"]]))
+            # The expectation is walked from the seeded folder, not assumed
+            mountpoint = mountpoint_of(trash)
+            assert source["mountpoint"] == str(mountpoint)
+            assert trash.is_relative_to(mountpoint)
+            assert os.path.ismount(source["mountpoint"])
+
+        # A missing XDG folder answers from its candidate path all the same
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+        fallback = collect_sources()[0]
+        assert fallback["id"] == "xdg"
+        assert fallback["mountpoint"] == str(mountpoint_of(tmp_path / "data" / "Trash"))
+
     def test_home_trash_resolving_to_the_xdg_trash_is_listed_once(
         self, tmp_path, monkeypatch
     ):

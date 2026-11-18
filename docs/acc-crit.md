@@ -831,4 +831,23 @@ The Show Volumes section bands and how they fold
   - log: 2026-11-18T16:45:14Z @kj owner decision: the notebook root reads WORKSPACE wherever it lives, never HOME, so the home trash and the root's own .Trash-<uid> never share a label
   - log: 2026-11-18T16:45:18Z @kj edited test "jest or Galata: serve a source labelled ~ and one labelled ~/workspace; the bands read HOME and WORKSPACE; a source under /home/cache keeps its path" -> "pytest: the xdg source reads HOME under the server user's home and its path otherwise; the first location (the notebook root) reads WORKSPACE wherever it lives, never HOME; a later location and a /home/cache source keep their label"
   - log: 2026-11-18T16:59:31Z @kj closed
+- [x] `ACC-BANDS-110-NO-SCROLLBAR` **the animating entries box draws no scrollbar** - MEDIUM; While the harmonica pull or fold animates the entries box, no scrollbar is visible on the box although its height is shorter than its rows. At rest the open list keeps its visible scrollbar.
+  - evidence: The Galata case 'the fold draws no scrollbar on the leaving empty section' passes at retry 0 in the full 39-case suite at 1.1.35; the animating box computes the transparent scrollbar pair.
+  - related: DEF-PANEL-48-FOLD-SCROLLBAR
+  - related: ACC-BANDS-107-HARMONICA
+  - test: Galata case 'the fold draws no scrollbar on the leaving empty section' passes at retry 0.
+  - test-tags: FUNCTIONAL
+  - mechanism: 2026-11-18T18:24:07Z @kj scrollbar-color: transparent transparent applies only while jp-mod-animating is on the box; _paintPull adds the class, _clearHeights removes it.
+  - mechanism: 2026-11-18T17:49:26Z @kj scrollbar-color transparent and a transparent webkit scrollbar apply only while jp-mod-animating is on the box; _paintPull adds the class, _clearHeights removes it.
+  - log: 2026-11-18T17:49:26Z @kj added
+  - log: 2026-11-18T18:24:07Z @kj edited text "While the harmonica pull or fold animates the entries box, the box draws no scrollbar although its height is shorter than its rows; the scrollbar strip stays, so the rows do not move sideways. At rest the open list keeps its scrollbar." -> "While the harmonica pull or fold animates the entries box, no scrollbar is visible on the box although its height is shorter than its rows. At rest the open list keeps its visible scrollbar."
+  - log: 2026-11-18T18:53:53Z @kj closed
+- [x] `ACC-BANDS-111-TRASH-TIP` **the band tooltip names the mountpoint of its volume** - MEDIUM; The tooltip of a section band names the mountpoint of the volume that holds that band's trash folder, so the volume behind a standardised label is visible: a trash on the root filesystem reads /, and one on another disk reads that disk's mountpoint.
+  - evidence: The Galata case 'the band tooltip names the mountpoint of the volume holding its trash' passes at retry 0 in the full 40-case suite at 1.1.35; the installed routes.py carries volume_mountpoint and the band title ends with the mountpoint.
+  - mechanism: 2026-11-18T18:54:03Z @kj the server resolves each trash folder's mountpoint by walking its ancestors to the first os.path.ismount path and sends it in the sources answer; the band label's title appends it
+  - related: ACC-BANDS-109-HOME-LABEL
+  - test: Hover a band and read its title; it names the mountpoint of the volume that holds the band's trash folder.
+  - log: 2026-11-18T17:49:44Z @kj added
+  - log: 2026-11-18T18:54:02Z @kj edited title "the band tooltip names the trash folder it uses" -> "the band tooltip names the mountpoint of its volume"; text "The tooltip of a section band names the trash folder that band uses, so the volume behind a standardised label stays visible: the XDG trash folder for HOME, the notebook root's .Trash-<uid> folder for WORKSPACE, and each location's own trash folder." -> "The tooltip of a section band names the mountpoint of the volume that holds that band's trash folder, so the volume behind a standardised label is visible: a trash on the root filesystem reads /, and one on another disk reads that disk's mountpoint."; test "Hover a band and read its title; it names that band's trash folder." -> "Hover a band and read its title; it names the mountpoint of the volume that holds the band's trash folder."
+  - log: 2026-11-18T19:24:09Z @kj closed
 
