@@ -337,6 +337,72 @@ const sectionRows = (widget: TrashWidget, id: string): HTMLElement[] =>
     )
   );
 
+const column = (widget: TrashWidget): HTMLElement =>
+  find(widget, '.jp-TrashPanel-sections');
+
+const sectionEntries = (widget: TrashWidget, id: string): HTMLElement =>
+  sectionOf(widget, id).querySelector<HTMLElement>(
+    '.jp-TrashPanel-sectionEntries'
+  )!;
+
+const homeEntries = (widget: TrashWidget): HTMLElement =>
+  sectionEntries(widget, 'xdg');
+
+const homeChrome = (widget: TrashWidget): HTMLElement =>
+  find(widget, '.jp-TrashPanel-homeChrome');
+
+/** Open a folded band with a click on its fold toggle. */
+const openBand = (widget: TrashWidget, id: string): void => {
+  click(sectionHeader(widget, id));
+};
+
+/** Stub measured heights, which jsdom does not compute. */
+function measure(
+  element: HTMLElement,
+  values: Partial<
+    Record<'offsetHeight' | 'scrollHeight' | 'clientHeight', number>
+  >
+): void {
+  for (const [name, value] of Object.entries(values)) {
+    Object.defineProperty(element, name, {
+      configurable: true,
+      get: () => value
+    });
+  }
+}
+
+/** Give an element a settable scroll position and a content height. */
+function scrollAt(
+  element: HTMLElement,
+  top: number,
+  scrollHeight: number
+): void {
+  let value = top;
+  Object.defineProperty(element, 'scrollTop', {
+    configurable: true,
+    get: () => value,
+    set: (next: number) => {
+      value = next;
+    }
+  });
+  measure(element, { scrollHeight });
+}
+
+/** Send a wheel notch over the panel, outside the open entries box. */
+function wheel(
+  widget: TrashWidget,
+  deltaY: number,
+  target?: HTMLElement
+): WheelEvent {
+  const event = new WheelEvent('wheel', {
+    deltaY,
+    bubbles: true,
+    cancelable: true
+  });
+  (target ?? summary(widget)).dispatchEvent(event);
+  return event;
+}
+
 beforeEach(() => {
   jest.useFakeTimers();
   request.mockReset();
@@ -525,15 +591,18 @@ describe('filter', () => {
     showVolumesOn();
     const widget = await open(sourcedRoutes());
     click(filterButton(widget));
+    openBand(widget, 'home:alice');
     type(widget, 'alice');
     // Only alice.txt carries the text; one.txt and cache.bin do not
     expect(rowNames(widget)).toEqual([]);
-    expect(sectionRows(widget, 'cache')).toHaveLength(0);
     expect(sectionRows(widget, 'home:alice')).toHaveLength(1);
+    openBand(widget, 'cache');
+    expect(sectionRows(widget, 'cache')).toHaveLength(0);
 
     type(widget, '');
     expect(rowNames(widget)).toEqual(['one.txt']);
     expect(sectionRows(widget, 'cache')).toHaveLength(1);
+    openBand(widget, 'home:alice');
     expect(sectionRows(widget, 'home:alice')).toHaveLength(1);
   });
 });
@@ -1966,18 +2035,23 @@ describe('trash sources', () => {
       sectionOf(widget, 'xdg').querySelector('.jp-TrashPanel-sectionRow')
     ).toBeNull();
 
-    // A section per source, in the order the server returned them
+    // The column is the summary bar's next sibling, and the home section is
+    // its first child; the other sections follow in the server's order
+    expect(summary(widget).nextElementSibling).toBe(column(widget));
+    expect(column(widget).firstElementChild).toBe(sectionOf(widget, 'xdg'));
     expect(sections(widget).map(element => element.dataset.source)).toEqual([
       'xdg',
       'cache',
       'home:alice'
     ]);
-    expect(listBox(widget).compareDocumentPosition(sections(widget)[0])).toBe(
-      Node.DOCUMENT_POSITION_PRECEDING
-    );
-    expect(listBox(widget).compareDocumentPosition(sections(widget)[1])).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING
-    );
+
+    // The breadcrumb, the sort headers and the main list live in the home
+    // entries box
+    expect(homeChrome(widget).contains(breadcrumb(widget))).toBe(true);
+    expect(
+      homeChrome(widget).contains(find(widget, '.jp-TrashPanel-columnHeader'))
+    ).toBe(true);
+    expect(homeEntries(widget).contains(listBox(widget))).toBe(true);
 
     // A source the server did not return has no section
     expect(widget.node.querySelector('[data-source="home:bob"]')).toBeNull();
@@ -2036,7 +2110,7 @@ describe('trash sources', () => {
     expect(ellipsis).toEqual(['ellipsis', 'nowrap']);
   });
 
-  it('lifts the 40% cap of the sections only while the main list is empty', async () => {
+  it('the open section takes its content height and the next band follows it', async () => {
     const style = document.createElement('style');
     style.textContent = jest
       .requireActual('fs')
@@ -2044,21 +2118,29 @@ describe('trash sources', () => {
     document.head.appendChild(style);
     const routes = { ...sourcedRoutes(), list: listOf([]) };
     const widget = await openAttached(routes);
-    const box = find(widget, '.jp-TrashPanel-sections');
-    const emptyCap = getComputedStyle(box).maxHeight;
+    const box = column(widget);
+    const cap = getComputedStyle(box).maxHeight;
+    const columnDisplay = getComputedStyle(box).display;
+    // The shorthand resolves to overflow-x hidden and overflow-y auto
+    const openOverflow = getComputedStyle(homeEntries(widget)).overflow;
+    const foldedDisplay = getComputedStyle(
+      sectionEntries(widget, 'cache')
+    ).display;
     // ACC-NAV-85-EMPTY-LINE: the empty line is italic and never centered
     const emptyLine = getComputedStyle(find(widget, '.jp-TrashPanel-empty'));
     const emptyJustify = emptyLine.justifyContent;
     const emptyFontStyle = emptyLine.fontStyle;
-
-    routes.list = listOf([file('one.txt')], '5 B');
-    await widget.refresh();
-    await settle();
-    const fullCap = getComputedStyle(box).maxHeight;
     style.remove();
 
-    expect(emptyCap).toBe('none');
-    expect(fullCap).toBe('40%');
+    // No 40 percent cap: the open box takes its content height, and the next
+    // band follows it in the column
+    expect(cap).not.toBe('40%');
+    expect(columnDisplay).toBe('flex');
+    expect(openOverflow).toBe('hidden auto');
+    expect(foldedDisplay).toBe('none');
+    expect(sectionOf(widget, 'xdg').nextElementSibling).toBe(
+      sectionOf(widget, 'cache')
+    );
     expect(emptyJustify).not.toBe('center');
     expect(emptyFontStyle).toBe('italic');
   });
@@ -2086,51 +2168,103 @@ describe('trash sources', () => {
     expect(sourceCalls()).toBe(2);
   });
 
-  it('collapses on a header click, writes the key, and reloads collapsed', async () => {
+  it('opens on a band click, writes the key, and reloads the same state', async () => {
     const widget = await open(sourcedRoutes());
     const header = sectionHeader(widget, 'cache');
     expect(header.tagName).toBe('BUTTON');
     expect(header.getAttribute('type')).toBe('button');
+    // A fresh key opens the home section alone
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    // Every listing is prefetched, so a folded band already holds its rows;
+    // the collapsed class keeps them out of sight and out of the tab order
+    expect(sectionRows(widget, 'cache')).toHaveLength(1);
+    expect(sectionOf(widget, 'cache').classList).toContain('jp-mod-collapsed');
+    expect(sectionEntries(widget, 'cache').hasAttribute('inert')).toBe(true);
+
+    // A click on the folded band opens it and folds every other
+    click(header);
     expect(header.getAttribute('aria-expanded')).toBe('true');
     expect(sectionRows(widget, 'cache')).toHaveLength(1);
-
-    click(header);
-    expect(header.getAttribute('aria-expanded')).toBe('false');
-    expect(sectionList(widget, 'cache').hidden).toBe(true);
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(
+      sectionHeader(widget, 'home:alice').getAttribute('aria-expanded')
+    ).toBe('false');
     expect(sectionLabel(widget, 'cache').textContent).toBe(
       '/home/cache (12 items, 40 MB)'
     );
     expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
-      'cache'
+      'xdg',
+      'home:alice'
     ]);
 
-    // A fresh widget reads the same key and draws the section collapsed
-    const again = await open(sourcedRoutes());
-    expect(sectionHeader(again, 'cache').getAttribute('aria-expanded')).toBe(
+    // A second click folds it, and nothing opens
+    click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(sectionOf(widget, 'cache').classList).toContain('jp-mod-collapsed');
+    expect(sectionEntries(widget, 'cache').hasAttribute('inert')).toBe(true);
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
       'false'
     );
-    expect(sectionList(again, 'cache').hidden).toBe(true);
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'xdg',
+      'cache',
+      'home:alice'
+    ]);
+
+    // A fresh widget reads the same key and draws every section folded
+    const again = await open(sourcedRoutes());
+    for (const id of ['xdg', 'cache', 'home:alice']) {
+      expect(sectionHeader(again, id).getAttribute('aria-expanded')).toBe(
+        'false'
+      );
+    }
+    expect(sectionRows(again, 'cache')).toHaveLength(1);
+    expect(sectionOf(again, 'cache').classList).toContain('jp-mod-collapsed');
     expect(sectionLabel(again, 'cache').textContent).toBe(
       '/home/cache (12 items, 40 MB)'
     );
-    expect(
-      sectionHeader(again, 'home:alice').getAttribute('aria-expanded')
-    ).toBe('true');
+
+    // A click on the folded cache band opens it again
+    click(sectionHeader(again, 'cache'));
+    expect(sectionHeader(again, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
   });
 
   it('toggles from the keyboard with Enter and Space', async () => {
     const widget = await openAttached(sourcedRoutes());
     const header = sectionHeader(widget, 'home:alice');
     header.focus();
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
 
+    // Enter opens the folded band and folds the previous open section
     press(header, 'Enter');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(sectionRows(widget, 'home:alice')).toHaveLength(1);
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'xdg',
+      'cache'
+    ]);
+    expect(document.activeElement).toBe(header);
+
+    // Space folds the now-open band and leaves the focus on it
+    press(header, ' ');
     expect(header.getAttribute('aria-expanded')).toBe('false');
     expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'xdg',
+      'cache',
       'home:alice'
     ]);
-
-    press(header, ' ');
-    expect(header.getAttribute('aria-expanded')).toBe('true');
     expect(document.activeElement).toBe(header);
   });
 
@@ -2142,11 +2276,13 @@ describe('trash sources', () => {
 
     // The xdg list and the cache section answer without the held source
     expect(rowNames(widget)).toEqual(['one.txt']);
+    openBand(widget, 'cache');
     expect(sectionRows(widget, 'cache')).toHaveLength(1);
     expect(sectionRows(widget, 'home:alice')).toHaveLength(0);
 
     held.resolve(listOf([file('alice.txt')], '2 KB'));
     await settle();
+    openBand(widget, 'home:alice');
     expect(sectionRows(widget, 'home:alice')).toHaveLength(1);
   });
 
@@ -2390,8 +2526,9 @@ describe('trash sources', () => {
     const widget = await open(routes);
 
     expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
-      'true'
+      'false'
     );
+    openBand(widget, 'cache');
     expect(sectionLabel(widget, 'cache').textContent).toContain('HTTP 500');
     expect(sectionRows(widget, 'cache')).toHaveLength(0);
   });
@@ -2454,6 +2591,7 @@ describe('location trash sections', () => {
     expect(sectionLabel(widget, LOCATION).textContent).toBe(
       '/mnt/data (2 items, 3 KB)'
     );
+    openBand(widget, LOCATION);
     expect(sectionList(widget, LOCATION).getAttribute('role')).toBe('listbox');
     expect(locationRows(widget).map(row => row.tabIndex)).toEqual([0, -1]);
   });
@@ -2461,6 +2599,7 @@ describe('location trash sections', () => {
   it('opens the Restore menu on right-click and posts the source with the path', async () => {
     const widget = await open(locationRoutes());
     const opened = sectionMenuOpen(widget);
+    openBand(widget, LOCATION);
 
     rightClick(locationRows(widget)[0]);
     expect(opened).toHaveBeenCalledTimes(1);
@@ -2502,6 +2641,7 @@ describe('location trash sections', () => {
 
   it('turns off the panel hover while the Restore menu is open (ACC-SCOPE-84-ROW-HOVER)', async () => {
     const widget = await openAttached(locationRoutes());
+    openBand(widget, LOCATION);
 
     rightClick(locationRows(widget)[0]);
     expect(widget.node.classList).toContain('jp-mod-contextMenuOpen');
@@ -2513,6 +2653,7 @@ describe('location trash sections', () => {
   it('opens the menu with Shift+F10 and the menu key on the focused row', async () => {
     const widget = await openAttached(locationRoutes());
     const opened = sectionMenuOpen(widget);
+    openBand(widget, LOCATION);
     const row = locationRows(widget)[1];
     row.focus();
     expect(row.tabIndex).toBe(0);
@@ -2530,6 +2671,7 @@ describe('location trash sections', () => {
 
   it('moves the active row with the arrows, Home and End as one tab stop', async () => {
     const widget = await openAttached(locationRoutes());
+    openBand(widget, LOCATION);
     const [first, second] = locationRows(widget);
     first.focus();
 
@@ -2552,6 +2694,7 @@ describe('location trash sections', () => {
 
   it('keeps the focused row node when a refresh brings the same listing', async () => {
     const widget = await openAttached(locationRoutes());
+    openBand(widget, LOCATION);
     const row = locationRows(widget)[1];
     row.focus();
     const asked = requested().filter(endPoint => endPoint === LISTING).length;
@@ -2577,6 +2720,7 @@ describe('location trash sections', () => {
       routes[LISTING] = listOf([file('a.txt'), file('b.txt'), file('c.txt')]);
       const widget = await openAttached(routes);
       sectionMenuOpen(widget);
+      openBand(widget, LOCATION);
       const row = locationRows(widget)[restored];
       row.focus();
       press(row, 'F10', { shiftKey: true });
@@ -2600,6 +2744,7 @@ describe('location trash sections', () => {
   it('shows the error of a 409 answer and keeps the row', async () => {
     const widget = await open(locationRoutes());
     sectionMenuOpen(widget);
+    openBand(widget, LOCATION);
     rightClick(locationRows(widget)[0]);
 
     const routes = locationRoutes();
@@ -2635,6 +2780,7 @@ describe('location trash sections', () => {
     async (id, name) => {
       const widget = await openAttached(locationRoutes());
       const opened = sectionMenuOpen(widget);
+      openBand(widget, id);
       const row = sectionRows(widget, id)[0];
       expect(sectionList(widget, id).getAttribute('role')).toBe('listbox');
       expect(row.getAttribute('role')).toBe('option');
@@ -3149,6 +3295,7 @@ describe('Show Volumes and the merged list', () => {
     const routes = mergedRoutes();
     routes.empty = { success: true, deleted_count: 1 };
     const widget = await open(routes);
+    openBand(widget, LOCATION);
     expect(sectionRows(widget, LOCATION)).toHaveLength(1);
     const before = routes[LISTING];
     const { early, fresh } = await holdListings(widget, routes);
@@ -3259,6 +3406,7 @@ describe('Show Volumes in every right-click', () => {
     const widget = await open(sourcedRoutes());
     const opened = menuOpen(widget, '_sectionMenu');
     const header = menuOpen(widget, '_headerMenu');
+    openBand(widget, 'cache');
 
     const event = rightClick(sectionRows(widget, 'cache')[0]);
     expect(opened).toHaveBeenCalledTimes(1);
@@ -3395,6 +3543,7 @@ describe('Show Volumes in every right-click', () => {
     it('Show Volumes from the Shift+F10 menu of a section row focuses the main list', async () => {
       showVolumesOn();
       const widget = await openAttached(sourcedRoutes());
+      openBand(widget, 'cache');
       const row = sectionRows(widget, 'cache')[0];
       row.focus();
       press(row, 'F10', { shiftKey: true });
@@ -3431,6 +3580,7 @@ describe('Show Volumes in every right-click', () => {
     it('Escape from a mouse-opened section row menu focuses that row', async () => {
       showVolumesOn();
       const widget = await openAttached(sourcedRoutes());
+      openBand(widget, 'cache');
       const row = sectionRows(widget, 'cache')[0];
       openMenuOn(row);
       const menu = (widget as any)._sectionMenu;
@@ -3445,6 +3595,7 @@ describe('Show Volumes in every right-click', () => {
     it('Show Volumes off from a mouse-opened section row menu focuses the main list', async () => {
       showVolumesOn();
       const widget = await openAttached(sourcedRoutes());
+      openBand(widget, 'cache');
       openMenuOn(sectionRows(widget, 'cache')[0]);
       const menu = (widget as any)._sectionMenu;
       expect(menu.isAttached).toBe(true);
@@ -3588,6 +3739,17 @@ describe('trash buttons', () => {
     routes.empty = { success: true, deleted_count: 2 };
     serve(routes);
 
+    // The home section is open; the emptied band is folded, as before
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    for (const id of ['cache', 'home:alice', LOCATION]) {
+      expect(sectionHeader(widget, id).getAttribute('aria-expanded')).toBe(
+        'false'
+      );
+    }
+    const key = window.localStorage.getItem(COLLAPSED_KEY);
+
     const button = bandEmpty(widget, LOCATION);
     button.focus();
     press(button, 'Enter');
@@ -3605,17 +3767,22 @@ describe('trash buttons', () => {
       source: LOCATION
     });
 
-    // Neither the click nor Enter folded a section, and the reload ran
+    // Neither the click nor Enter changed the fold state, and the reload ran
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
     for (const id of ['cache', 'home:alice', LOCATION]) {
       expect(sectionHeader(widget, id).getAttribute('aria-expanded')).toBe(
-        'true'
+        'false'
       );
     }
-    expect(window.localStorage.getItem(COLLAPSED_KEY)).toBeNull();
-    expect(sectionRows(widget, 'cache')).toHaveLength(1);
+    expect(window.localStorage.getItem(COLLAPSED_KEY)).toBe(key);
     expect(
       request.mock.calls.filter(call => call[0] === 'sources').length
     ).toBeGreaterThan(1);
+    // The other sections keep their rows
+    openBand(widget, 'cache');
+    expect(sectionRows(widget, 'cache')).toHaveLength(1);
   });
 
   it('gives the focus to the fold toggle when a keyboard empty disables the band button', async () => {
@@ -3765,8 +3932,10 @@ describe('trash buttons', () => {
     expect(button.hidden).toBe(false);
     expect(button.disabled).toBe(true);
     expect(veil(widget).hidden).toBe(true);
-    // The other trashes keep their rows
-    expect(sectionRows(widget, LOCATION)).toHaveLength(2);
+    // The other trashes keep their rows, reported by their bands
+    expect(sectionLabel(widget, LOCATION).textContent).toContain(
+      '(2 items, 3 KB)'
+    );
   });
 
   it('disables the home band button at 0 items and has no home band while Show Volumes is off', async () => {
@@ -3906,10 +4075,12 @@ describe('trash buttons', () => {
   it('shows Trash is empty under an expanded band whose trash lists 0 items, and drops it when the trash gains an item', async () => {
     showVolumesOn();
     const widget = await open(emptyCacheRoutes());
+    openBand(widget, 'cache');
     const line = emptyLine(widget, 'cache');
     expect(line.hidden).toBe(false);
     expect(line.textContent).toBe('Trash is empty');
     expect(line.previousElementSibling).toBe(sectionList(widget, 'cache'));
+    expect(line.parentElement).toBe(sectionEntries(widget, 'cache'));
     expect(emptyLine(widget, 'home:alice').hidden).toBe(true);
 
     serve(bandRoutes());
@@ -3920,24 +4091,39 @@ describe('trash buttons', () => {
   });
 
   it('shows no Trash is empty line under a folded band or while the band listing is pending', async () => {
+    const style = document.createElement('style');
+    style.textContent = jest
+      .requireActual('fs')
+      .readFileSync('style/base.css', 'utf8');
+    document.head.appendChild(style);
     showVolumesOn();
     const routes = emptyCacheRoutes();
     const pending = deferred<unknown>();
     routes['list?source=cache'] = () => pending.promise;
     const widget = await open(routes);
+    // Open while the listing is pending: no line yet
+    openBand(widget, 'cache');
     expect(emptyLine(widget, 'cache').hidden).toBe(true);
 
     pending.resolve(listOf([]));
     await settle();
     expect(emptyLine(widget, 'cache').hidden).toBe(false);
 
+    // A fold hides the line with the entries box, the only content switch
     click(sectionHeader(widget, 'cache'));
     expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
       'false'
     );
-    expect(emptyLine(widget, 'cache').hidden).toBe(true);
+    expect(emptyLine(widget, 'cache').hidden).toBe(false);
+    expect(getComputedStyle(sectionEntries(widget, 'cache')).display).toBe(
+      'none'
+    );
     click(sectionHeader(widget, 'cache'));
     expect(emptyLine(widget, 'cache').hidden).toBe(false);
+    expect(getComputedStyle(sectionEntries(widget, 'cache')).display).not.toBe(
+      'none'
+    );
+    style.remove();
   });
 
   it('shows no Trash is empty line under a band that shows an error', async () => {
@@ -3982,9 +4168,6 @@ describe('home band', () => {
     };
   }
 
-  const columnHeader = (widget: TrashWidget) =>
-    find(widget, '.jp-TrashPanel-columnHeader');
-
   it('with Show Volumes on, the summary bar totals every trash with no trash button, and the home band shows ~, its count and an enabled trash button', async () => {
     showVolumesOn();
     const widget = await open(homeRoutes());
@@ -3992,10 +4175,12 @@ describe('home band', () => {
     expect(summary(widget).textContent).toBe('5 items \u00B7 3.0 KB');
     expect(summary(widget).querySelector('button')).toBeNull();
 
-    // The home band sits between the summary bar and the breadcrumb
+    // The column is the summary bar's next sibling; the home section is its
+    // first child, and the breadcrumb lives in the home entries box
     const home = sectionOf(widget, 'xdg');
-    expect(summary(widget).nextElementSibling).toBe(home);
-    expect(home.nextElementSibling).toBe(breadcrumb(widget));
+    expect(summary(widget).nextElementSibling).toBe(column(widget));
+    expect(column(widget).firstElementChild).toBe(home);
+    expect(homeEntries(widget).contains(breadcrumb(widget))).toBe(true);
     expect(sectionLabel(widget, 'xdg').textContent).toBe('~ (2 items, 2.0 KB)');
     const button = home.querySelector<HTMLButtonElement>(
       '.jp-TrashPanel-sectionEmpty'
@@ -4004,24 +4189,33 @@ describe('home band', () => {
     expect(button.title).toBe('Empty Trash in ~');
     // Its rows are the main list's, shown once
     expect(rowNames(widget).sort()).toEqual(['a.txt', 'b.txt']);
+    openBand(widget, LOCATION);
     expect(sectionRows(widget, LOCATION)).toHaveLength(3);
   });
 
   it('folding the home band hides the column header and the main list and saves xdg as folded; a reload keeps it folded', async () => {
+    const style = document.createElement('style');
+    style.textContent = jest
+      .requireActual('fs')
+      .readFileSync('style/base.css', 'utf8');
+    document.head.appendChild(style);
     showVolumesOn();
     const widget = await open(homeRoutes());
-    expect(columnHeader(widget).style.display).toBe('flex');
-    expect(listBox(widget).style.display).toBe('block');
+    // The home entries box is the switch: its collapsed class hides the
+    // breadcrumb, the sort headers and the main list together
+    expect(getComputedStyle(homeEntries(widget)).display).not.toBe('none');
 
     click(sectionHeader(widget, 'xdg'));
     expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
       'false'
     );
-    expect(columnHeader(widget).style.display).toBe('none');
-    expect(listBox(widget).style.display).toBe('none');
+    expect(getComputedStyle(homeEntries(widget)).display).toBe('none');
     expect(sectionOf(widget, 'xdg').classList).toContain('jp-mod-collapsed');
-    // The other bands take the free height
-    expect(widget.node.classList).toContain('jp-mod-empty');
+    expect(homeEntries(widget).style.display).toBe('');
+    // The other bands stay on screen, folded
+    expect(sectionOf(widget, 'xdg').nextElementSibling).toBe(
+      sectionOf(widget, LOCATION)
+    );
     expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toContain(
       'xdg'
     );
@@ -4030,17 +4224,21 @@ describe('home band', () => {
     expect(sectionHeader(again, 'xdg').getAttribute('aria-expanded')).toBe(
       'false'
     );
-    expect(columnHeader(again).style.display).toBe('none');
-    expect(listBox(again).style.display).toBe('none');
+    expect(getComputedStyle(homeEntries(again)).display).toBe('none');
 
     click(sectionHeader(again, 'xdg'));
-    expect(columnHeader(again).style.display).toBe('flex');
-    expect(listBox(again).style.display).toBe('block');
+    expect(getComputedStyle(homeEntries(again)).display).not.toBe('none');
     expect(rowNames(again).sort()).toEqual(['a.txt', 'b.txt']);
+    style.remove();
   });
 
   // DEF-PANEL-41-SECTION-EMPTY, home half: the main list's empty line
   it('shows Trash is empty under the expanded home band of an empty home trash, and none while it is folded', async () => {
+    const style = document.createElement('style');
+    style.textContent = jest
+      .requireActual('fs')
+      .readFileSync('style/base.css', 'utf8');
+    document.head.appendChild(style);
     showVolumesOn();
     const routes = homeRoutes();
     routes.sources = [
@@ -4049,14 +4247,20 @@ describe('home band', () => {
     ];
     routes.list = listOf([]);
     const widget = await open(routes);
-    const line = find(widget, ':scope > .jp-TrashPanel-empty');
+    const line = homeEntries(widget).querySelector<HTMLElement>(
+      '.jp-TrashPanel-empty'
+    )!;
     expect(line.textContent).toBe('Trash is empty');
     expect(line.style.display).toBe('');
+    expect(getComputedStyle(homeEntries(widget)).display).not.toBe('none');
 
     click(sectionHeader(widget, 'xdg'));
-    expect(line.style.display).toBe('none');
+    expect(line.style.display).toBe('');
+    expect(getComputedStyle(homeEntries(widget)).display).toBe('none');
     click(sectionHeader(widget, 'xdg'));
     expect(line.style.display).toBe('');
+    expect(getComputedStyle(homeEntries(widget)).display).not.toBe('none');
+    style.remove();
   });
 
   it('builds the home band alone, with no list or Trash is empty line of its own', async () => {
@@ -4064,9 +4268,17 @@ describe('home band', () => {
     const widget = await open(homeRoutes());
 
     const home = sectionOf(widget, 'xdg');
-    expect(home.children).toHaveLength(1);
+    expect(home.children).toHaveLength(2);
     expect(home.firstElementChild!.className).toBe('jp-TrashPanel-sectionBand');
-    // Its rows are the main list, so no detached list or line is held either
+    expect(home.lastElementChild!.className).toBe(
+      'jp-TrashPanel-sectionEntries'
+    );
+    // Its rows are the main list and its empty line, both moved in, so no
+    // detached list or line is held either
+    expect(homeEntries(widget).contains(listBox(widget))).toBe(true);
+    expect(
+      homeEntries(widget).querySelectorAll('.jp-TrashPanel-empty')
+    ).toHaveLength(1);
     const parts = (widget as any)._sectionParts.get('xdg');
     expect(parts.section).toBe(home);
     expect(parts).not.toHaveProperty('list');
@@ -4093,6 +4305,579 @@ describe('home band', () => {
       'c.txt',
       'd.txt',
       'e.txt'
+    ]);
+  });
+});
+
+describe('harmonica controller', () => {
+  /** Measure every band at 21px and the open entries box, as a browser would. */
+  function measureLayout(
+    widget: TrashWidget,
+    openId: string,
+    values: { base: number; content: number; column?: number }
+  ): void {
+    for (const section of sections(widget)) {
+      measure(section.firstElementChild as HTMLElement, { offsetHeight: 21 });
+    }
+    measure(column(widget), { clientHeight: values.column ?? 400 });
+    measure(sectionEntries(widget, openId), {
+      offsetHeight: values.base,
+      scrollHeight: values.content
+    });
+  }
+
+  it('opens one section at a time: a band click folds the previous', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    openBand(widget, 'cache');
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(sectionOf(widget, 'xdg').classList).toContain('jp-mod-collapsed');
+
+    openBand(widget, 'xdg');
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'cache',
+      'home:alice'
+    ]);
+  });
+
+  it('derives the open section from the collapsed key and normalises the key', async () => {
+    // A key written before the refinement leaves several sections open: the
+    // first in source order opens and the rest count as folded
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(['home:alice']));
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(
+      sectionHeader(widget, 'home:alice').getAttribute('aria-expanded')
+    ).toBe('false');
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'cache',
+      'home:alice'
+    ]);
+
+    // A key naming every source folds every section
+    window.localStorage.setItem(
+      COLLAPSED_KEY,
+      JSON.stringify(['xdg', 'cache', 'home:alice'])
+    );
+    const folded = await open(sourcedRoutes());
+    for (const id of ['xdg', 'cache', 'home:alice']) {
+      expect(sectionHeader(folded, id).getAttribute('aria-expanded')).toBe(
+        'false'
+      );
+    }
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'xdg',
+      'cache',
+      'home:alice'
+    ]);
+  });
+
+  it('stacks a short open section: the next band follows and no cap applies', async () => {
+    const style = document.createElement('style');
+    style.textContent = jest
+      .requireActual('fs')
+      .readFileSync('style/base.css', 'utf8');
+    document.head.appendChild(style);
+    showVolumesOn();
+    const widget = await openAttached(sourcedRoutes());
+    const home = sectionOf(widget, 'xdg');
+    const cache = sectionOf(widget, 'cache');
+    const computed = {
+      columnDisplay: getComputedStyle(column(widget)).display,
+      columnMaxHeight: getComputedStyle(column(widget)).maxHeight,
+      openShrink: getComputedStyle(home).flexShrink,
+      foldedShrink: getComputedStyle(cache).flexShrink,
+      openOverflow: getComputedStyle(homeEntries(widget)).overflow
+    };
+    style.remove();
+
+    // The open section is the only shrinkable item; the bands keep 0 shrink
+    expect(computed.columnDisplay).toBe('flex');
+    expect(computed.columnMaxHeight).not.toBe('40%');
+    expect(computed.openShrink).toBe('1');
+    expect(computed.foldedShrink).toBe('0');
+    expect(computed.openOverflow).toBe('hidden auto');
+    // The next band follows the open section in source order
+    expect(home.nextElementSibling).toBe(cache);
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+  });
+
+  it('a column shorter than its twelve bands scrolls them in short mode', async () => {
+    const style = document.createElement('style');
+    style.textContent = jest
+      .requireActual('fs')
+      .readFileSync('style/base.css', 'utf8');
+    document.head.appendChild(style);
+    showVolumesOn();
+    const sources = Array.from({ length: 12 }, (_, index) =>
+      sourceOf(`home:s${index}`, 0, '0 B')
+    );
+    const routes: Record<string, Route> = {
+      sources,
+      list: listOf([])
+    };
+    for (const source of sources) {
+      routes[`list?source=${encodeURIComponent(source.id)}`] = listOf([]);
+    }
+    const widget = await openAttached(routes);
+    // Twelve 21px bands and their section borders exceed the 200px column
+    for (const section of sections(widget)) {
+      measure(section, { offsetHeight: 21 });
+      measure(
+        section.querySelector<HTMLElement>('.jp-TrashPanel-sectionEntries')!,
+        { offsetHeight: 0 }
+      );
+    }
+    measure(column(widget), { clientHeight: 200 });
+    (widget as any)._updateShort();
+
+    expect(column(widget).classList).toContain('jp-mod-short');
+    expect(getComputedStyle(column(widget)).overflowY).toBe('auto');
+    const open = sections(widget).find(
+      section => !section.classList.contains('jp-mod-collapsed')
+    )!;
+    expect(getComputedStyle(open).flexShrink).toBe('0');
+    // The wheel keeps the browser's native scroll instead of folding
+    expect(wheel(widget, 100).defaultPrevented).toBe(false);
+
+    // A column that holds the bands is not short
+    measure(column(widget), { clientHeight: 300 });
+    (widget as any)._updateShort();
+    expect(column(widget).classList).not.toContain('jp-mod-short');
+    style.remove();
+  });
+
+  it('a wheel at the open list end pulls the next entries box in by max(3px, delta/4)', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 200, content: 200 });
+    scrollAt(homeEntries(widget), 0, 200);
+
+    const event = wheel(widget, 100);
+    expect(event.defaultPrevented).toBe(true);
+    expect(homeEntries(widget).style.height).toBe('175px');
+    expect(sectionEntries(widget, 'cache').style.height).toBe('25px');
+    expect(sectionEntries(widget, 'cache').classList).toContain(
+      'jp-mod-animating'
+    );
+    // The entering band previews without claiming its section is open
+    expect(sectionOf(widget, 'cache').classList).not.toContain(
+      'jp-mod-collapsed'
+    );
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    // The prefetched rows are revealed by the same class removal, and the
+    // inert box keeps them out of the tab order through the preview
+    expect(sectionRows(widget, 'cache')).toHaveLength(1);
+    expect(sectionEntries(widget, 'cache').hasAttribute('inert')).toBe(true);
+
+    // A 12px notch adds its 3px floor on top of the pull on screen
+    wheel(widget, 12);
+    expect(sectionEntries(widget, 'cache').style.height).toBe('28px');
+  });
+
+  it('a direction change clears the opposite preview before the new stretch', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    openBand(widget, 'cache');
+    measureLayout(widget, 'cache', { base: 200, content: 200 });
+    scrollAt(sectionEntries(widget, 'cache'), 0, 200);
+
+    // Down previews the next section, home:alice, and pins the shrunken
+    // cache list to its bottom
+    wheel(widget, 100);
+    expect(sectionEntries(widget, 'home:alice').style.height).toBe('25px');
+    expect(sectionEntries(widget, 'cache').style.height).toBe('175px');
+    expect(sectionEntries(widget, 'cache').scrollTop).toBe(25);
+
+    // The shrunken list can scroll back up: this notch drops the preview
+    wheel(widget, -25);
+    expect(sectionEntries(widget, 'home:alice').style.height).toBe('');
+    expect(sectionEntries(widget, 'home:alice').classList).not.toContain(
+      'jp-mod-animating'
+    );
+    expect(sectionEntries(widget, 'cache').style.height).toBe('');
+    expect(sectionEntries(widget, 'cache').scrollTop).toBe(0);
+
+    // At its top, the next up notch previews the previous section, home
+    wheel(widget, -100);
+    expect(homeEntries(widget).style.height).toBe('25px');
+    expect(sectionEntries(widget, 'cache').style.height).toBe('175px');
+  });
+
+  it('the wheel event that reaches the give length folds both boxes over 400ms and swaps the open id', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 200, content: 200 });
+    scrollAt(homeEntries(widget), 0, 200);
+    // The entering content reads 0 while its section is folded, as a browser
+    // hides the box; jsdom needs the conditional stub because it has no layout
+    scrollAt(sectionEntries(widget, 'cache'), 0, 150);
+    Object.defineProperty(sectionEntries(widget, 'cache'), 'scrollHeight', {
+      configurable: true,
+      get: () =>
+        sectionOf(widget, 'cache').classList.contains('jp-mod-collapsed')
+          ? 0
+          : 150
+    });
+
+    // One notch reaches the 44px give, so the fold measures the entering
+    // content only after _paintPull reveals its box
+    const give = wheel(widget, 200);
+    expect(give.defaultPrevented).toBe(true);
+
+    // The fold runs from the heights on screen
+    await jest.advanceTimersByTimeAsync(200);
+    const leaving = Number.parseFloat(homeEntries(widget).style.height);
+    const entering = Number.parseFloat(
+      sectionEntries(widget, 'cache').style.height
+    );
+    expect(leaving).toBeGreaterThan(0);
+    expect(leaving).toBeLessThan(156);
+    expect(entering).toBeGreaterThan(44);
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+
+    // The ease-out approaches the 150px entering target; a measure taken
+    // before _paintPull reveals the box would read 0 and fail this assertion
+    await jest.advanceTimersByTimeAsync(150);
+    expect(
+      Number.parseFloat(sectionEntries(widget, 'cache').style.height)
+    ).toBeGreaterThanOrEqual(140);
+
+    await jest.advanceTimersByTimeAsync(400);
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(homeEntries(widget).style.height).toBe('');
+    expect(sectionEntries(widget, 'cache').style.height).toBe('');
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'xdg',
+      'home:alice'
+    ]);
+  });
+
+  it('pins a long open list to its bottom through the pull so the give fires', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 200, content: 500 });
+    scrollAt(homeEntries(widget), 300, 500);
+
+    // Down leaves the open list at its end: the bottom pins to the height
+    wheel(widget, 100);
+    expect(homeEntries(widget).style.height).toBe('175px');
+    expect(homeEntries(widget).scrollTop).toBe(325);
+    expect(sectionEntries(widget, 'cache').style.height).toBe('25px');
+
+    // Still at the end, so the next notch reaches the give and folds
+    wheel(widget, 100);
+    expect(sectionEntries(widget, 'cache').style.height).toBe('44px');
+    await jest.advanceTimersByTimeAsync(600);
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(homeEntries(widget).style.height).toBe('');
+  });
+
+  it('wheel events during the fold are ignored', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 200, content: 200 });
+    scrollAt(homeEntries(widget), 0, 200);
+
+    wheel(widget, 100);
+    wheel(widget, 100);
+    await jest.advanceTimersByTimeAsync(50);
+
+    const during = wheel(widget, 100);
+    expect(during.defaultPrevented).toBe(true);
+
+    await jest.advanceTimersByTimeAsync(500);
+    // The fold crossed one section; the alice band never opened
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(
+      sectionHeader(widget, 'home:alice').getAttribute('aria-expanded')
+    ).toBe('false');
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'xdg',
+      'home:alice'
+    ]);
+  });
+
+  it('the first wheel after the fold acts on the new section', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 200, content: 200 });
+    scrollAt(homeEntries(widget), 0, 200);
+    wheel(widget, 100);
+    wheel(widget, 100);
+    await jest.advanceTimersByTimeAsync(600);
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+
+    // The cache list is longer than its box, so the first wheel scrolls it
+    scrollAt(sectionEntries(widget, 'cache'), 0, 400);
+    measure(sectionEntries(widget, 'cache'), { offsetHeight: 200 });
+    const event = wheel(widget, 100);
+    expect(event.defaultPrevented).toBe(true);
+    expect(sectionEntries(widget, 'cache').scrollTop).toBe(100);
+    // The folded leaving list rests pinned at its end
+    expect(homeEntries(widget).scrollTop).toBe(200);
+  });
+
+  it('a base under 88px halves the give length', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 60, content: 60 });
+    scrollAt(homeEntries(widget), 0, 60);
+
+    wheel(widget, 100);
+    expect(homeEntries(widget).style.height).toBe('35px');
+    expect(sectionEntries(widget, 'cache').style.height).toBe('25px');
+    // The next notch reaches the 30px give length and folds at once
+    wheel(widget, 100);
+    expect(sectionEntries(widget, 'cache').style.height).toBe('30px');
+    await jest.advanceTimersByTimeAsync(600);
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+  });
+
+  it('the wheel passes through while the open entries box can scroll', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 200, content: 400 });
+    scrollAt(homeEntries(widget), 50, 400);
+
+    // Over the scroller the browser scrolls it; the gesture does not pull
+    const inside = wheel(widget, 100, homeEntries(widget));
+    expect(inside.defaultPrevented).toBe(false);
+    expect(homeEntries(widget).style.height).toBe('');
+    // Elsewhere in the panel the same wheel scrolls the open list by hand
+    const outside = wheel(widget, 100);
+    expect(outside.defaultPrevented).toBe(true);
+    expect(homeEntries(widget).scrollTop).toBe(150);
+  });
+
+  it('keeps the sub-pixel remainder of a forwarded wheel', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 200, content: 400 });
+    // A browser writes scrollTop in whole pixels and drops the fraction
+    let top = 100;
+    Object.defineProperty(homeEntries(widget), 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (next: number) => {
+        top = Math.trunc(next);
+      }
+    });
+
+    for (let index = 0; index < 10; index += 1) {
+      expect(wheel(widget, 0.4).defaultPrevented).toBe(true);
+    }
+    expect(homeEntries(widget).scrollTop).toBe(104);
+  });
+
+  it('a band click during the fold ends it and applies the click', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 200, content: 200 });
+    scrollAt(homeEntries(widget), 0, 200);
+    wheel(widget, 100);
+    wheel(widget, 100);
+    await jest.advanceTimersByTimeAsync(100);
+
+    // The leaving band's click opens it again on top of the fold's end state
+    openBand(widget, 'xdg');
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(homeEntries(widget).style.height).toBe('');
+    expect(sectionEntries(widget, 'cache').style.height).toBe('');
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'cache',
+      'home:alice'
+    ]);
+
+    // The cancelled fold leaves no frame that could reopen the cache
+    await jest.advanceTimersByTimeAsync(600);
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+  });
+
+  it('a filter or a listing arriving mid-fold ends the fold at its end state', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 200, content: 200 });
+    scrollAt(homeEntries(widget), 0, 200);
+    wheel(widget, 100);
+    wheel(widget, 100);
+    await jest.advanceTimersByTimeAsync(100);
+
+    // A filter render aborts the fold and keeps the entering section open
+    click(find<HTMLButtonElement>(widget, 'button[title="Filter trash"]'));
+    const input = find<HTMLInputElement>(widget, '.jp-TrashPanel-filterInput');
+    input.value = 'cache';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(homeEntries(widget).style.height).toBe('');
+    expect(sectionEntries(widget, 'cache').style.height).toBe('');
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'xdg',
+      'home:alice'
+    ]);
+  });
+
+  it('an abort mid-fold into home leaves its list and chrome shown', async () => {
+    const style = document.createElement('style');
+    style.textContent = jest
+      .requireActual('fs')
+      .readFileSync('style/base.css', 'utf8');
+    document.head.appendChild(style);
+    showVolumesOn();
+    const held = deferred<unknown>();
+    const routes = sourcedRoutes();
+    routes['list?source=cache'] = () => held.promise;
+    const widget = await open(routes);
+    openBand(widget, 'cache');
+    measureLayout(widget, 'cache', { base: 200, content: 0 });
+    scrollAt(sectionEntries(widget, 'cache'), 0, 0);
+
+    // Two upward notches reach the 44px give and fold into the home section
+    wheel(widget, -100);
+    wheel(widget, -100);
+    await jest.advanceTimersByTimeAsync(100);
+
+    // The held cache listing answers mid-fold: the abort lands on home, with
+    // its list and chrome shown rather than blanked by the old second switch
+    held.resolve(listOf([file('cache.bin')], '40 MB'));
+    await settle();
+
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(homeEntries(widget).style.height).toBe('');
+    expect(getComputedStyle(homeEntries(widget)).display).not.toBe('none');
+    expect(listBox(widget).style.display).toBe('block');
+    expect(rowNames(widget)).toEqual(['one.txt']);
+    style.remove();
+  });
+
+  it('a listing arriving mid-fold ends the fold at its end state', async () => {
+    showVolumesOn();
+    const held = deferred<unknown>();
+    const routes = sourcedRoutes();
+    routes['list?source=home%3Aalice'] = () => held.promise;
+    const widget = await open(routes);
+    measureLayout(widget, 'xdg', { base: 200, content: 200 });
+    scrollAt(homeEntries(widget), 0, 200);
+    wheel(widget, 100);
+    wheel(widget, 100);
+    await jest.advanceTimersByTimeAsync(100);
+
+    // The held listing answers mid-fold: the fold lands on cache, painted
+    held.resolve(listOf([file('alice.txt')], '2 KB'));
+    await settle();
+
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(sectionHeader(widget, 'xdg').getAttribute('aria-expanded')).toBe(
+      'false'
+    );
+    expect(sectionOf(widget, 'cache').classList).not.toContain(
+      'jp-mod-collapsed'
+    );
+    expect(sectionOf(widget, 'xdg').classList).toContain('jp-mod-collapsed');
+    expect(homeEntries(widget).style.height).toBe('');
+    expect(sectionEntries(widget, 'cache').style.height).toBe('');
+  });
+
+  it('Show Volumes off mid-fold clears the controller and restores the off layout', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    measureLayout(widget, 'xdg', { base: 200, content: 200 });
+    scrollAt(homeEntries(widget), 0, 200);
+    wheel(widget, 100);
+    wheel(widget, 100);
+    await jest.advanceTimersByTimeAsync(100);
+
+    widget.toggleShowVolumes();
+    expect(sections(widget)).toHaveLength(0);
+    expect(widget.node.classList).not.toContain('jp-mod-bands');
+    expect(summary(widget).nextElementSibling).toBe(breadcrumb(widget));
+    expect(breadcrumb(widget).parentElement).toBe(widget.node);
+    expect(listBox(widget).parentElement).toBe(widget.node);
+    await jest.advanceTimersByTimeAsync(600);
+    expect(sections(widget)).toHaveLength(0);
+  });
+
+  it('with every section folded the wheel does nothing and a band click opens a section', async () => {
+    window.localStorage.setItem(
+      COLLAPSED_KEY,
+      JSON.stringify(['xdg', 'cache', 'home:alice'])
+    );
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    for (const id of ['xdg', 'cache', 'home:alice']) {
+      expect(sectionHeader(widget, id).getAttribute('aria-expanded')).toBe(
+        'false'
+      );
+    }
+    measureLayout(widget, 'xdg', { base: 200, content: 200 });
+
+    const event = wheel(widget, 100);
+    expect(event.defaultPrevented).toBe(false);
+    expect(homeEntries(widget).style.height).toBe('');
+
+    openBand(widget, 'cache');
+    expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual([
+      'xdg',
+      'home:alice'
     ]);
   });
 });

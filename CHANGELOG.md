@@ -2,6 +2,18 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.34] - 2026-11-18
+
+### Added
+
+- The section bands fold by the design system's harmonica navigation: the wheel at a list end previews the neighbour's rows by a quarter of the scroll distance, the event that brings the pull to the give length folds over 400 ms and opens the next band, and wheel events during the fold do nothing; a click, Enter or Space opens a band
+- A short open band leaves the next band directly under its last row, and a panel too short for the bands scrolls the column so every band stays reachable
+
+### Changed
+
+- The open section takes only its content height; a section takes the remaining space only when its rows exceed it, replacing the 40 percent cap of the sections container
+- Folded sections keep their rows in the document, out of sight and out of the tab order, so the fold preview shows the neighbour's rows
+
 ## [1.1.33] - 2026-11-18
 
 ### Changed

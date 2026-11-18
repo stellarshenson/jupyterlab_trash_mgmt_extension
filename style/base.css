@@ -425,42 +425,103 @@
   text-overflow: ellipsis;
 }
 
-/* Extra trash sources: one section each, below the main list. The header is
-   a band copied from the Passkey vault sections: the 14px caret takes the
-   insetting, so the label still starts in the text column. */
+/* Extra trash sources: one section each. The section column takes every
+   section while Show Volumes is on, home first; it holds none and is hidden
+   while it is off, when the main elements sit directly in the panel. */
 .jp-TrashPanel-sections {
-  flex: 0 1 auto;
-  max-height: 40%;
+  display: none;
+}
+
+.jp-TrashPanel.jp-mod-bands .jp-TrashPanel-sections {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* A panel too short for the bands scrolls the column, so no band is clipped
+   out of reach; the open section keeps its content height inside it */
+.jp-TrashPanel.jp-mod-bands .jp-TrashPanel-sections.jp-mod-short {
   overflow-y: auto;
 }
 
-/* With the main list empty the sections take the free height below the empty line */
-.jp-TrashPanel.jp-mod-empty .jp-TrashPanel-sections {
-  flex: 1 1 auto;
-  max-height: none;
-}
-
+/* A section is its band plus an entries box. Only the open section's entries
+   box shrinks; every band and every folded section keeps its height, so a
+   short open section stacks the next band under its last row. */
 .jp-TrashPanel-section {
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  min-height: 0;
 }
 
-/* Dividers of a docked panel: one step from the band fill, between the
-   summary bar and the home band below it and under every band that shows no
-   rows and no empty line (folded, pending or failed); an expanded band's rows
-   and its empty line already differ in fill */
-.jp-TrashPanel-summary:has(+ .jp-TrashPanel-section) {
+.jp-TrashPanel-section:not(.jp-mod-collapsed) {
+  flex: 0 1 auto;
+}
+
+/* The entries box is the section's only scroll container */
+.jp-TrashPanel-sectionEntries {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden auto;
+}
+
+.jp-TrashPanel-section.jp-mod-collapsed .jp-TrashPanel-sectionEntries {
+  display: none;
+}
+
+/* While the controller sets inline heights the box keeps them */
+.jp-TrashPanel-sectionEntries.jp-mod-animating {
+  flex: 0 0 auto;
+}
+
+/* The home entries box's breadcrumb and sort headers stay over a scrolled
+   main list; during the pull they scroll away with the rows they preview */
+.jp-TrashPanel-homeChrome {
+  background: var(--jp-layout-color1);
+}
+
+.jp-TrashPanel-section:not(.jp-mod-collapsed)
+  .jp-TrashPanel-sectionEntries:not(.jp-mod-animating)
+  > .jp-TrashPanel-homeChrome {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+/* With bands on, the home entries box scrolls, not the main list */
+.jp-TrashPanel.jp-mod-bands .jp-TrashPanel-list {
+  overflow: visible;
+}
+
+/* Dividers of a docked panel: the summary bar above the column draws no
+   line; the column's first section draws the layout-color3 line instead.
+   Under every folded band, the last one included, a folded section keeps it;
+   the open section draws it only when it shows neither rows nor its line */
+.jp-TrashPanel.jp-mod-bands .jp-TrashPanel-summary {
   border-bottom: none;
 }
 
-.jp-TrashPanel-summary + .jp-TrashPanel-section {
+.jp-TrashPanel.jp-mod-bands
+  .jp-TrashPanel-sections
+  > .jp-TrashPanel-section:first-child {
   border-top: 1px solid var(--jp-layout-color3);
+}
+
+/* A short column keeps the open section at its content height, so the bands
+   stack instead of the open list shrinking away */
+.jp-TrashPanel.jp-mod-bands
+  .jp-TrashPanel-sections.jp-mod-short
+  .jp-TrashPanel-section:not(.jp-mod-collapsed) {
+  flex: 0 0 auto;
 }
 
 .jp-TrashPanel-section.jp-mod-collapsed,
 .jp-TrashPanel-section:has(
-  > .jp-TrashPanel-sectionList:empty + .jp-TrashPanel-empty[hidden]
+  > .jp-TrashPanel-sectionEntries
+    > .jp-TrashPanel-sectionList:empty
+    + .jp-TrashPanel-empty[hidden]
 ) {
   border-bottom: 1px solid var(--jp-layout-color3);
 }
@@ -475,9 +536,11 @@
   text-transform: uppercase;
 }
 
-/* The band holds the fold toggle and the trash button as siblings */
+/* The band holds the fold toggle and the trash button as siblings, and keeps
+   its content height while the open entries box takes the rest */
 .jp-TrashPanel-sectionBand {
   display: flex;
+  flex: 0 0 auto;
   background: var(--jp-layout-color2);
 }
 
@@ -570,11 +633,6 @@ button.jp-TrashPanel-sectionHeader:focus-visible {
 .jp-TrashPanel-sectionList {
   display: flex;
   flex-direction: column;
-}
-
-/* `display: flex` above would beat the user-agent `[hidden]` rule */
-.jp-TrashPanel-sectionList[hidden] {
-  display: none;
 }
 
 .jp-TrashPanel-sectionRow {

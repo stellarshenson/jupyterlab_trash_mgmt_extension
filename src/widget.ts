@@ -14,6 +14,13 @@ import { ServerConnection } from '@jupyterlab/services';
 import { closeIcon, filterIcon } from '@jupyterlab/ui-components';
 import { requestAPI } from './request';
 import { trashIcon, folderIcon, fileIcon, refreshIcon } from './icon';
+import {
+  atEnd,
+  easeOutCubic,
+  giveLength,
+  pullStep,
+  springPull
+} from './harmonica';
 
 const trans = nullTranslator.load('jupyterlab_trash_mgmt_extension');
 
@@ -202,6 +209,9 @@ interface ISectionParts {
   section: HTMLDivElement;
   header: HTMLButtonElement;
   empty: HTMLButtonElement;
+  // The entries box: the section's scroll container, the band excluded. It
+  // stands empty for the home section, whose rows are the main list moved in
+  entries: HTMLDivElement;
   // The Trash is empty line under the band of a trash that lists nothing;
   // the home band has none and no list, its rows are the main list
   none?: HTMLDivElement;
@@ -210,6 +220,12 @@ interface ISectionParts {
   list?: HTMLDivElement;
   // The listing the rows were drawn from, so an unchanged one is not redrawn
   key?: string;
+}
+
+/** One side of the wheel's height trade: its section and its entries box. */
+interface ISectionSide {
+  section: HTMLDivElement;
+  entries: HTMLDivElement;
 }
 
 type SortColumn = 'name' | 'modified' | 'size';
@@ -312,6 +328,28 @@ export class TrashWidget extends Widget {
   private _sectionMenu: Menu;
   private _sectionTarget: { source: string; item: ITrashItem } | null = null;
   private _sectionActive: Map<string, string> = new Map();
+  // The sticky breadcrumb-and-sort-header block of the home entries box
+  private _homeChrome: HTMLDivElement;
+  // Harmonica navigation: the wheel over the panel folds the open section
+  // into its neighbour at the give length
+  private _phase: 'idle' | 'pulling' | 'springing' | 'folding' = 'idle';
+  // The pull on screen, a magnitude; _pullDir carries the wheel's direction
+  private _pull = 0;
+  private _pullDir: 1 | -1 = 1;
+  // The open entries box's height at rest, held through the gesture
+  private _base = 0;
+  private _give = 44;
+  private _leave: ISectionSide | null = null;
+  private _enter: ISectionSide | null = null;
+  private _enterTarget = 0;
+  private _foldStart = 0;
+  private _springStart = 0;
+  private _springFrom = 0;
+  private _frame: number | null = null;
+  private _springTimer: ReturnType<typeof setTimeout> | null = null;
+  // The sub-pixel remainder a whole-pixel scrollTop write drops
+  private _wheelCarry = 0;
+  private _onWheel = (event: WheelEvent): void => this._handleWheel(event);
 
   constructor(serverSettings: ServerConnection.ISettings) {
     super();
@@ -507,10 +545,19 @@ export class TrashWidget extends Widget {
     this._emptyMessage.style.display = 'none';
     this.node.appendChild(this._emptyMessage);
 
-    // Extra sources, below the main list: one collapsible section each
+    // The section column holds every section with Show Volumes on, home
+    // first; with it off the column is empty and hidden
     this._sectionsEl = document.createElement('div');
     this._sectionsEl.className = 'jp-TrashPanel-sections';
     this.node.appendChild(this._sectionsEl);
+
+    // The sticky block of the home entries box: it wraps the breadcrumb and
+    // the sort headers while Show Volumes is on, and holds no child while off
+    this._homeChrome = document.createElement('div');
+    this._homeChrome.className = 'jp-TrashPanel-homeChrome';
+
+    // The wheel over the whole panel drives the section in focus
+    this.node.addEventListener('wheel', this._onWheel, { passive: false });
 
     // Create loading veil - visible by default, until the first load ends
     this._loadingVeil = document.createElement('div');
@@ -610,6 +657,8 @@ export class TrashWidget extends Widget {
    * source is left for the top level.
    */
   toggleShowVolumes(): void {
+    // A pull, spring or fold in flight ends at rest before the repaint
+    this._abortHarmonica();
     this._showVolumes = !this._showVolumes;
     saveShowVolumes(this._showVolumes);
     // A removed section takes the focus with it; the main list gets it
@@ -1006,48 +1055,51 @@ export class TrashWidget extends Widget {
     this._sectionFetched.clear();
     this._renderSections();
     this._paintEmptyBtn();
-    if (!this._showVolumes) {
-      // The merged list lists every other source; each joins as it answers
-      for (const source of sources) {
-        if (source.id !== 'xdg' && !source.error) {
-          void this._loadSectionList(source);
-        }
+    // Every other source lists at once: off, its rows join the merged list as
+    // it answers; on, a fold previews and opens a neighbour with rows ready
+    for (const source of sources) {
+      if (source.id !== 'xdg' && !source.error) {
+        void this._loadSectionList(source);
       }
-      if (this._path.length === 0) {
-        this._renderMain();
-      }
+    }
+    if (!this._showVolumes && this._path.length === 0) {
+      this._renderMain();
     }
   }
 
   /**
-   * Draw the sections of the sources the server returned, in its order. A
-   * source that still has a section keeps its elements and the focus in them.
+   * Draw the sections of the sources the server returned, home first and the
+   * rest in its order. One section is open at rest; the collapsed key is
+   * normalised to describe exactly that. A source that still has a section
+   * keeps its elements and the focus in them.
    */
   private _renderSections(): void {
+    this._abortHarmonica();
+    if (this._showVolumes && this._sources.length > 0) {
+      this._normaliseCollapsed();
+    }
+    this.toggleClass('jp-mod-bands', this._showVolumes);
     const folded = this._homeFolded();
     const previous = new Map(this._sectionParts);
     this._sectionParts.clear();
     // Show Volumes off draws none
-    const sources = this._showVolumes ? this._sources : [];
+    const sources = this._showVolumes ? this._orderedSources() : [];
     let index = 0;
     for (const source of sources) {
       const parts = previous.get(source.id) ?? this._createSection(source);
       previous.delete(source.id);
       this._sectionParts.set(source.id, parts);
       // Moving a node drops the focus in it, so only a misplaced section
-      // moves; the home band sits above the main list it folds
-      if (source.id === 'xdg') {
-        if (this._breadcrumb.previousElementSibling !== parts.section) {
-          this.node.insertBefore(parts.section, this._breadcrumb);
-        }
-      } else {
-        const at = this._sectionsEl.children[index++] ?? null;
-        if (at !== parts.section) {
-          this._sectionsEl.insertBefore(parts.section, at);
-        }
+      // moves
+      const at = this._sectionsEl.children[index++] ?? null;
+      if (at !== parts.section) {
+        this._sectionsEl.insertBefore(parts.section, at);
       }
       this._paintSection(source, parts);
     }
+    // The main elements move into the home entries box, or back before the
+    // column first, so removing a home section never takes the list with it
+    this._placeMainElements();
     for (const parts of previous.values()) {
       parts.section.remove();
     }
@@ -1055,11 +1107,99 @@ export class TrashWidget extends Widget {
     if (this._homeFolded() !== folded) {
       this._paintHomeFold();
     }
+    this._updateShort();
+  }
+
+  /** The home section first, then the other sources in the server's order. */
+  private _orderedSources(): ITrashSource[] {
+    const home = this._sources.find(source => source.id === 'xdg');
+    const rest = this._sources.filter(source => source.id !== 'xdg');
+    return home === undefined ? rest : [home, ...rest];
+  }
+
+  /** The section open at rest: the first source the key leaves open. */
+  private _openId(): string | null {
+    return (
+      this._orderedSources().find(source => !this._collapsed.has(source.id))
+        ?.id ?? null
+    );
+  }
+
+  /**
+   * Write every source id to the collapsed key except the open one, or every
+   * id when none is open, so the key describes the drawn state.
+   */
+  private _normaliseCollapsed(): void {
+    this._setOpen(this._openId());
+  }
+
+  /** Open one section and fold every other; nothing opens for a null id. */
+  private _setOpen(id: string | null): void {
+    this._collapsed = new Set(
+      this._sources.filter(source => source.id !== id).map(source => source.id)
+    );
+    saveCollapsed(this._collapsed);
+  }
+
+  /**
+   * Move the breadcrumb, the column header, the main list and its empty line
+   * into the home entries box while Show Volumes is on, and back before the
+   * column while it is off. A node moves only from a wrong parent, so a
+   * re-render keeps the focus.
+   */
+  private _placeMainElements(): void {
+    const home = this._sectionParts.get('xdg');
+    const inside = this._showVolumes && home !== undefined;
+    if (!inside) {
+      // The main elements move out of the home entries box first, so the
+      // removed home section can never take the list with it
+      if (this._breadcrumb.parentElement !== this.node) {
+        this.node.insertBefore(this._breadcrumb, this._sectionsEl);
+      }
+      if (this._columnHeader.parentElement !== this.node) {
+        this.node.insertBefore(this._columnHeader, this._sectionsEl);
+      }
+      if (this._list.parentElement !== this.node) {
+        this.node.insertBefore(this._list, this._sectionsEl);
+      }
+      if (this._emptyMessage.parentElement !== this.node) {
+        this.node.insertBefore(this._emptyMessage, this._sectionsEl);
+      }
+      // The column keeps its place after the main elements
+      if (this._sectionsEl.previousElementSibling !== this._emptyMessage) {
+        this._emptyMessage.after(this._sectionsEl);
+      }
+      return;
+    }
+    // The column sits directly under the summary bar while it draws the home
+    // section
+    if (this._summary.nextElementSibling !== this._sectionsEl) {
+      this.node.insertBefore(
+        this._sectionsEl,
+        this._summary.nextElementSibling
+      );
+    }
+    const entries = home!.entries;
+    if (this._homeChrome.parentElement !== entries) {
+      entries.insertBefore(this._homeChrome, entries.firstChild);
+    }
+    if (this._breadcrumb.parentElement !== this._homeChrome) {
+      this._homeChrome.appendChild(this._breadcrumb);
+    }
+    if (this._columnHeader.parentElement !== this._homeChrome) {
+      this._homeChrome.appendChild(this._columnHeader);
+    }
+    if (this._list.parentElement !== entries) {
+      entries.appendChild(this._list);
+    }
+    if (this._emptyMessage.parentElement !== entries) {
+      entries.appendChild(this._emptyMessage);
+    }
   }
 
   /** True while the home band shows folded, which hides the main list. */
   private _homeFolded(): boolean {
-    return this._sectionParts.has('xdg') && this._collapsed.has('xdg');
+    return this._sectionParts.has('xdg') && this._openId() !== 'xdg';
   }
 
   /** Show or hide the breadcrumb, column header and main list by the home fold. */
@@ -1068,6 +1208,308 @@ export class TrashWidget extends Widget {
     if (this._renderBreadcrumb()) {
       this._focusListOrRefresh();
     }
+  }
+
+  /**
+   * The static bands: every section's band plus its section borders, which
+   * the entries box's own height does not cover.
+   */
+  private _bandHeight(): number {
+    let bands = 0;
+    for (const parts of this._sectionParts.values()) {
+      bands += parts.section.offsetHeight - parts.entries.offsetHeight;
+    }
+    return bands;
+  }
+
+  /** True while the static bands alone fill or overflow the column. */
+  private _short(): boolean {
+    return (
+      this._sectionsEl.clientHeight > 0 &&
+      this._sectionsEl.clientHeight - this._bandHeight() <= 0
+    );
+  }
+
+  /** Scroll the column in a panel too short for its bands, or clip it. */
+  private _updateShort(): void {
+    this._sectionsEl.classList.toggle('jp-mod-short', this._short());
+  }
+
+  /**
+   * The panel-wide wheel. At the open list's end it stretches a pull that
+   * previews the neighbour; the event that brings the pull to the give
+   * length folds the section and opens the neighbour. Elsewhere the browser
+   * keeps the event, and the open list scrolls natively or by the delta.
+   */
+  private _handleWheel(event: WheelEvent): void {
+    // A horizontal or zoom wheel is the browser's
+    if (event.deltaY === 0 || event.ctrlKey) {
+      return;
+    }
+    // Wheel events during the fold are cancelled and do nothing
+    if (this._phase === 'folding') {
+      event.preventDefault();
+      return;
+    }
+    // A column too short for its bands scrolls as a whole; the browser keeps
+    // the wheel so no band is clipped out of reach
+    if (this._short()) {
+      return;
+    }
+    const openId = this._openId();
+    const parts = openId === null ? undefined : this._sectionParts.get(openId);
+    // No open section, or the veil covers the panel: the page keeps its scroll
+    if (parts === undefined || !this._loadingVeil.hidden) {
+      return;
+    }
+    const scroller = parts.entries;
+    if (this._phase === 'idle') {
+      // The held base is the open box's height at rest
+      this._base = scroller.offsetHeight;
+      this._give = giveLength(this._base);
+    }
+    const direction: 1 | -1 = event.deltaY > 0 ? 1 : -1;
+    if (
+      !atEnd(scroller.scrollTop, scroller.scrollHeight, this._base, direction)
+    ) {
+      // The open list can scroll this way
+      this._resetPull();
+      if (scroller.contains(event.target as Node)) {
+        return;
+      }
+      event.preventDefault();
+      // A whole-pixel scrollTop write drops the remainder; keep it so a
+      // slow touchpad scroll still moves
+      const want = scroller.scrollTop + this._wheelCarry + event.deltaY;
+      scroller.scrollTop = want;
+      const dropped = want - scroller.scrollTop;
+      this._wheelCarry = Math.abs(dropped) < 1 ? dropped : 0;
+      return;
+    }
+    event.preventDefault();
+    const order = this._orderedSources();
+    const at = order.findIndex(source => source.id === openId);
+    const neighbour = order[at + direction];
+    // No neighbour: the event is absorbed and starts no pull
+    if (neighbour === undefined) {
+      this._resetPull();
+      return;
+    }
+    // Stretch from the pull on screen; a direction change drops the preview
+    // and starts at zero, so the opposite neighbour is never left stretched
+    let start = this._pull;
+    if (this._pullDir !== direction) {
+      this._resetPull();
+      start = 0;
+    }
+    this._stopSpring();
+    const enterParts = this._sectionParts.get(neighbour.id)!;
+    this._leave = { section: parts.section, entries: scroller };
+    this._enter = { section: enterParts.section, entries: enterParts.entries };
+    this._pullDir = direction;
+    this._phase = 'pulling';
+    this._pull = pullStep(start, event.deltaY, this._give);
+    if (this._pull >= this._give) {
+      this._startFold();
+      return;
+    }
+    this._paintPull();
+    this._armSpring();
+  }
+
+  /** Render the pull as a height trade between the two entries boxes. */
+  private _paintPull(): void {
+    const leave = this._leave;
+    const enter = this._enter;
+    if (leave === null || enter === null) {
+      return;
+    }
+    const pull = Math.max(0, this._pull);
+    leave.entries.classList.add('jp-mod-animating');
+    enter.entries.classList.add('jp-mod-animating');
+    // The entering band draws no folded divider while it previews
+    enter.section.classList.remove('jp-mod-collapsed');
+    const leaveHeight = Math.max(0, this._base - pull);
+    leave.entries.style.height = `${leaveHeight}px`;
+    enter.entries.style.height = `${pull}px`;
+    this._pin(leave, leaveHeight);
+    this._pin(enter, pull);
+  }
+
+  /**
+   * Pin the leaving list to the edge the user is at and the entering list
+   * to the opposite edge, after the height is applied: down leaves the
+   * bottom and enters the top, up the reverse.
+   */
+  private _pin(side: ISectionSide, height: number): void {
+    const top =
+      this._pullDir === 1 ? side === this._enter : side === this._leave;
+    side.entries.scrollTop = top
+      ? 0
+      : Math.max(0, side.entries.scrollHeight - height);
+  }
+
+  /** Arm the 160ms idle spring that returns a short pull to rest. */
+  private _armSpring(): void {
+    this._stopSpring();
+    this._springTimer = setTimeout(() => {
+      this._springTimer = null;
+      if (this._phase !== 'pulling') {
+        return;
+      }
+      this._phase = 'springing';
+      this._springStart = Date.now();
+      this._springFrom = this._pull;
+      this._stepSpring();
+    }, 160);
+  }
+
+  /** Run the damped spring from the pull on screen, under 300ms. */
+  private _stepSpring(): void {
+    this._frame = requestAnimationFrame(() => {
+      this._frame = null;
+      const elapsed = Date.now() - this._springStart;
+      this._pull = springPull(this._springFrom, elapsed);
+      if (Math.abs(this._pull) < 1 || elapsed >= 300) {
+        this._resetPull();
+        return;
+      }
+      this._paintPull();
+      this._stepSpring();
+    });
+  }
+
+  /**
+   * Fold the leaving section to its band and open the entering one over
+   * 400ms, ease-out cubic, from the heights on screen. The enter target is
+   * its content height or the space the bands leave, whichever is shorter.
+   */
+  private _startFold(): void {
+    const enter = this._enter!;
+    this._phase = 'folding';
+    this._foldStart = Date.now();
+    // The give event renders its own preview before the frames take over;
+    // the reveal also lets the entering box's content be measured
+    this._paintPull();
+    const free = this._sectionsEl.clientHeight - this._bandHeight();
+    this._enterTarget = Math.max(0, Math.min(enter.entries.scrollHeight, free));
+    this._stepFold();
+  }
+
+  /** One fold frame; the wall clock finishes it even in a throttled tab. */
+  private _stepFold(): void {
+    this._frame = requestAnimationFrame(() => {
+      this._frame = null;
+      const elapsed = Date.now() - this._foldStart;
+      const e = easeOutCubic(Math.min(1, elapsed / 400));
+      const leave = this._leave!;
+      const enter = this._enter!;
+      const leaveHeight = (this._base - this._give) * (1 - e);
+      const enterHeight = this._give + (this._enterTarget - this._give) * e;
+      leave.entries.style.height = `${leaveHeight}px`;
+      enter.entries.style.height = `${enterHeight}px`;
+      this._pin(leave, leaveHeight);
+      this._pin(enter, enterHeight);
+      if (elapsed >= 400) {
+        this._finishFold();
+        return;
+      }
+      this._stepFold();
+    });
+  }
+
+  /** Swap the open section at the fold's end and clear every inline height. */
+  private _finishFold(): void {
+    const leave = this._leave!;
+    const enter = this._enter!;
+    const enterId = enter.section.dataset.source!;
+    const homeFolded = this._homeFolded();
+    // The leaving entries box is hidden after the fold; the focus moves to
+    // the entering band rather than the page body
+    const hadFocus = leave.section.contains(document.activeElement);
+    const direction = this._pullDir;
+    this._clearHeights();
+    this._pull = 0;
+    this._phase = 'idle';
+    this._leave = null;
+    this._enter = null;
+    this._setOpen(enterId);
+    this._paintAllSections();
+    // The entering list rests at the edge the wheel came from
+    enter.entries.scrollTop =
+      direction === 1
+        ? 0
+        : Math.max(0, enter.entries.scrollHeight - enter.entries.offsetHeight);
+    if (hadFocus) {
+      this._sectionParts.get(enterId)?.header.focus();
+    }
+    if (this._homeFolded() !== homeFolded) {
+      this._paintHomeFold();
+    }
+  }
+
+  /**
+   * End any pull, spring or fold at rest before a repaint. A running fold
+   * keeps its entering section open; the normalised key is saved.
+   */
+  private _abortHarmonica(): void {
+    const folding = this._phase === 'folding';
+    const enterId = folding
+      ? (this._enter?.section.dataset.source ?? null)
+      : null;
+    this._clearHeights();
+    // The preview dropped the folded class; the open state did not change
+    if (this._enter !== null && !folding) {
+      this._enter.section.classList.add('jp-mod-collapsed');
+    }
+    this._pull = 0;
+    this._phase = 'idle';
+    this._leave = null;
+    this._enter = null;
+    if (folding && enterId !== null) {
+      // The fold's end state: the entering section opens, the leaving folds
+      this._setOpen(enterId);
+      this._paintAllSections();
+    } else if (this._showVolumes && this._sources.length > 0) {
+      this._normaliseCollapsed();
+    }
+  }
+
+  /** Cancel the spring timer and the frame, and drop the inline heights. */
+  private _clearHeights(): void {
+    this._stopSpring();
+    for (const side of [this._leave, this._enter]) {
+      if (side === null) {
+        continue;
+      }
+      side.entries.classList.remove('jp-mod-animating');
+      side.entries.style.height = '';
+    }
+  }
+
+  /** Stop the spring timer and its frame chain. */
+  private _stopSpring(): void {
+    if (this._springTimer !== null) {
+      clearTimeout(this._springTimer);
+      this._springTimer = null;
+    }
+    if (this._frame !== null) {
+      cancelAnimationFrame(this._frame);
+      this._frame = null;
+    }
+  }
+
+  /** Drop the pull, its preview and the spring, leaving the open section. */
+  private _resetPull(): void {
+    const enter = this._enter;
+    this._clearHeights();
+    if (enter !== null) {
+      enter.section.classList.add('jp-mod-collapsed');
+    }
+    this._pull = 0;
+    this._phase = 'idle';
+    this._leave = null;
+    this._enter = null;
   }
 
   private _createSection(source: ITrashSource): ISectionParts {
@@ -1111,10 +1553,14 @@ export class TrashWidget extends Widget {
     trashIcon.element({ container: empty });
     empty.addEventListener('click', () => this._emptySource(source.id));
     band.append(header, empty);
-    section.append(band);
-    // The home band's rows are the main list below it
+
+    // The entries box is the section's only scroll container
+    const entries = document.createElement('div');
+    entries.className = 'jp-TrashPanel-sectionEntries';
+    section.append(band, entries);
+    // The home band's rows are the main list, moved into its entries box
     if (source.id === 'xdg') {
-      return { section, header, empty, caret, label };
+      return { section, header, empty, entries, caret, label };
     }
 
     const none = document.createElement('div');
@@ -1147,22 +1593,54 @@ export class TrashWidget extends Widget {
       this._activateSectionRow(source.id, list, e.target as HTMLElement)
     );
 
-    section.append(list, none);
-    return { section, header, empty, none, caret, label, list };
+    entries.append(list, none);
+    return { section, header, empty, entries, none, caret, label, list };
   }
 
+  /**
+   * A band click or key: open the folded band, or fold the open one. A fold
+   * in flight ends at its end state first, so the click applies to the
+   * section the fold leaves open.
+   */
   private _toggleSection(id: string): void {
-    if (!this._collapsed.delete(id)) {
+    const homeFolded = this._homeFolded();
+    this._abortHarmonica();
+    if (this._openId() === id) {
       this._collapsed.add(id);
+      saveCollapsed(this._collapsed);
+    } else {
+      this._setOpen(id);
     }
-    saveCollapsed(this._collapsed);
-    const parts = this._sectionParts.get(id);
-    const source = this._sources.find(item => item.id === id);
-    if (parts !== undefined && source !== undefined) {
-      this._paintSection(source, parts);
-    }
-    if (id === 'xdg') {
+    this._paintAllSections();
+    if (homeFolded !== this._homeFolded()) {
       this._paintHomeFold();
+    }
+  }
+
+  /** Draw every section from its source and its own listing. */
+  private _paintAllSections(): void {
+    // The collapsed class hides the home entries box, and a browser blurs a
+    // hidden box before _renderItems can see the focus; remember it
+    const homeFocus =
+      document.activeElement === this._list ||
+      this._columnHeader.contains(document.activeElement);
+    for (const source of this._sources) {
+      const parts = this._sectionParts.get(source.id);
+      if (parts !== undefined) {
+        this._paintSection(source, parts);
+      }
+    }
+    // A hidden box that kept the focus hands it to the home band, or to the
+    // refresh button while the empty branch would
+    if (
+      homeFocus &&
+      this._homeFolded() &&
+      !this.node.contains(document.activeElement)
+    ) {
+      (this._items.length === 0
+        ? this._refreshBtn
+        : this._sectionParts.get('xdg')!.header
+      ).focus();
     }
   }
 
@@ -1172,21 +1650,24 @@ export class TrashWidget extends Widget {
    * reports what it holds.
    */
   private _paintSection(source: ITrashSource, parts: ISectionParts): void {
-    const expanded = !this._collapsed.has(source.id);
+    // A pull, spring or fold in flight ends at rest before the repaint
+    this._abortHarmonica();
+    const expanded = this._openId() === source.id;
     parts.header.setAttribute('aria-expanded', String(expanded));
     parts.caret.textContent = expanded ? '▾' : '▸';
     // A folded band draws the divider under it
     parts.section.classList.toggle('jp-mod-collapsed', !expanded);
+    // The collapsed class hides the entries box; folded and previewed rows
+    // never take a tab stop
+    parts.entries.toggleAttribute('inert', !expanded);
     setOff(parts.empty, source.item_count === 0, parts.header);
 
     const cached = this._sectionListings.get(source.id);
     const error =
       source.error || (cached instanceof Error ? cached.message : '');
     if (parts.list && parts.none) {
-      parts.list.hidden = !expanded;
-      // Not while folded, pending or failed
+      // Not while pending or failed
       parts.none.hidden =
-        !expanded ||
         Boolean(error) ||
         cached === undefined ||
         cached instanceof Error ||
@@ -1211,11 +1692,11 @@ export class TrashWidget extends Widget {
     count.textContent = this._sourceCount(source);
     parts.label.replaceChildren(text, count);
     // The home band's rows are the main list, which lists on its own
-    if (!expanded || parts.list === undefined) {
+    if (parts.list === undefined) {
       return;
     }
 
-    // Each expanded source lists on its own; a pending answer is not asked again
+    // Every source lists on its own; a pending answer is not asked again
     void this._loadSectionList(source);
     if (cached === undefined || cached instanceof Error) {
       return;
@@ -1428,7 +1909,7 @@ export class TrashWidget extends Widget {
       this._breadcrumb.querySelectorAll<HTMLElement>('.jp-TrashPanel-crumb')
     ).indexOf(document.activeElement as HTMLElement);
     this._breadcrumb.innerHTML = '';
-    this._breadcrumb.hidden = this._path.length === 0 || this._homeFolded();
+    this._breadcrumb.hidden = this._path.length === 0;
 
     const labels = ['Trash', ...this._path];
     const built: HTMLElement[] = [];
@@ -1459,7 +1940,13 @@ export class TrashWidget extends Widget {
     });
 
     const restore = built[focused];
-    if (restore instanceof HTMLButtonElement && !this._breadcrumb.hidden) {
+    // The folded home entries box hides the crumb, so it cannot take the
+    // focus back
+    if (
+      restore instanceof HTMLButtonElement &&
+      !this._breadcrumb.hidden &&
+      !this._homeFolded()
+    ) {
       restore.focus();
       return false;
     }
@@ -1469,7 +1956,9 @@ export class TrashWidget extends Widget {
   /** Focus the list, or the refresh button when the list is hidden. */
   private _focusListOrRefresh(): void {
     const target =
-      this._list.style.display === 'none' ? this._refreshBtn : this._list;
+      this._homeFolded() || this._list.style.display === 'none'
+        ? this._refreshBtn
+        : this._list;
     target.focus();
   }
 
@@ -1578,12 +2067,11 @@ export class TrashWidget extends Widget {
   }
 
   private _renderItems(): void {
+    // A pull, spring or fold in flight ends at rest before the repaint
+    this._abortHarmonica();
     this._list.innerHTML = '';
     this._itemElements.clear();
     const folded = this._homeFolded();
-    // Lifts the height cap of the sections while the main list is empty or
-    // folded
-    this.toggleClass('jp-mod-empty', this._items.length === 0 || folded);
 
     if (this._items.length === 0) {
       // The merged top level is empty only once every source has answered
@@ -1602,7 +2090,7 @@ export class TrashWidget extends Widget {
         this._path.length > 0
           ? trans.__('Folder is empty')
           : trans.__('Trash is empty');
-      this._emptyMessage.style.display = waiting || folded ? 'none' : '';
+      this._emptyMessage.style.display = waiting ? 'none' : '';
       // A hidden element cannot hold the focus; hand it to the header
       if (
         document.activeElement === this._list ||
@@ -1626,8 +2114,8 @@ export class TrashWidget extends Widget {
     ) {
       this._sectionParts.get('xdg')!.header.focus();
     }
-    this._columnHeader.style.display = folded ? 'none' : 'flex';
-    this._list.style.display = folded ? 'none' : 'block';
+    this._columnHeader.style.display = 'flex';
+    this._list.style.display = 'block';
 
     this._sortedItems = this._getSortedItems().filter(item =>
       this._matchesFilter(item)
@@ -2389,10 +2877,28 @@ export class TrashWidget extends Widget {
   }
 
   /**
+   * Handle `resize` messages - end a gesture at rest and repaint the open
+   * section, so the new geometry applies before the next wheel.
+   */
+  protected onResize(msg: Widget.ResizeMessage): void {
+    super.onResize(msg);
+    this._abortHarmonica();
+    const openId = this._openId();
+    const source = this._sources.find(item => item.id === openId);
+    const parts = openId === null ? undefined : this._sectionParts.get(openId);
+    if (source !== undefined && parts !== undefined) {
+      this._paintSection(source, parts);
+    }
+    this._updateShort();
+  }
+
+  /**
    * Dispose of the widget and clean up resources.
    */
   dispose(): void {
     this._stopAutoRefresh();
+    this._stopSpring();
+    this.node.removeEventListener('wheel', this._onWheel);
     if (this._warmMarkTimer !== null) {
       clearTimeout(this._warmMarkTimer);
       this._warmMarkTimer = null;

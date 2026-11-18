@@ -605,6 +605,7 @@ Additional trash sources shown below the main list, their collapsible sections, 
   - log: 2026-11-14T09:30:59Z @kj edited title "Extra monitored locations are a server option" -> "Extra monitored locations are a server option"; text "the XDG trash is always the main list; c.TrashManagement.extra_locations adds folders whose own trash is monitored, default ['.'], the notebook root; ~ is expanded, a relative path resolves against the notebook root; no mount table is read and no mount below a location is visited, so an NFS volume under the workspace sends no traffic" -> "the XDG trash and the notebook root's trash are always monitored; c.TrashManagement.locations adds folders, default []; ~ is expanded, a relative path resolves against the notebook root; no mount table is read and no mount below a location is visited, so an NFS volume under the workspace sends no traffic"; test "pytest: the default gives the notebook root alone; a trash at the top of a folder mounted below the root adds no section; a configured ~/.cache holding .Trash-<uid> adds its section; the XDG main list is unchanged" -> "pytest: the default monitors the XDG trash and the root alone; a trash at the top of a folder mounted below the root adds no section; a configured ~/.cache holding .Trash-<uid> adds its section"; reason: owner: the XDG trash and the notebook root are always monitored; locations only adds folders
   - log: 2026-11-14T09:51:52Z @kj closed
 - [x] `ACC-SCOPE-82-SECTION-SHARE` **Sections take the free height when the main list is empty** - MEDIUM; while the main list holds items, the sections take at most 40 percent of the panel height and scroll inside it; when the main list is empty, the sections take the free height below the empty line and no blank band sits under them
+  - overridden-by: ACC-BANDS-107-HARMONICA
   - evidence: jest 'lifts the 40% cap of the sections only while the main list is empty'; Galata 'expanded sections keep a 40 percent cap and leave the main list its share' and 'with an empty main list the sections reach the panel bottom' pass at retry 0; run wf_3f26d09c-145
   - test: Galata at a 500 px panel: with main-list items the sections stay at 40 percent; with an empty main list and long sections, the sections reach the panel bottom
   - test-tags: UNIT, E2E
@@ -790,4 +791,27 @@ Finding a file or folder in the trash list by name or path
   - mechanism: 2026-11-17T22:53:39Z @kj filter button in the header toggles an input type=search with a clear button, as the AI code assistants and passkey panels; input re-renders the main list and every section matching name or original path, ignoring case; hiding the field clears the query
   - log: 2026-11-17T22:53:39Z @kj added
   - log: 2026-11-18T00:17:52Z @kj closed
+
+## Section bands `BANDS`
+
+The Show Volumes section bands and how they fold
+
+- log: 2026-11-18T12:39:06Z @kj category created
+
+- [x] `ACC-BANDS-107-HARMONICA` **Trash bands fold by harmonica navigation** - MEDIUM; Trash panel bands follow the design system's harmonica navigation: the wheel over the panel drives the focused section, which takes the panel while the other bands stay; the event that pulls a list end to the give length folds it and opens the neighbour; a band click opens it.
+  - evidence: jest: harmonica controller cases (pull, give, boundary, fold, spring) and widget fold cases; Galata 'the wheel folds the open band at its end and short bands stack under it' plus the header click and Enter/Space cases green at retry 0, slow suite wf_20ec12a4-7f4 38/38, accept 81-accept.json; review SHIP wf_8ceb1659-491
+  - overrides: ACC-SCOPE-82-SECTION-SHARE
+  - test: Galata: Show Volumes on with two non-empty bands; at a list end each wheel event moves the neighbour in by max(3px, a quarter of the delta); the event reaching the give length folds and opens it over 400 ms; wheel during the fold does nothing; a click opens a band.
+  - test-tags: E2E
+  - mechanism: 2026-11-18T12:39:06Z @kj the design system's Harmonica navigation chapter is the source: the wheel over the panel drives the focused section, the pull preview is max(3px, a quarter of the scroll), the give length is 44px or half the base height below 88px, the fold takes 400 ms and swallows wheel events
+  - log: 2026-11-18T12:39:06Z @kj added
+  - log: 2026-11-18T14:41:15Z @kj closed
+- [x] `ACC-BANDS-108-STACK` **Short bands stack directly under the previous** - MEDIUM; When the open band's rows do not fill the panel, the next band follows immediately under the last row, and further bands stack below it; a section takes the full panel and moves the other bands away only once its rows exceed the available height.
+  - evidence: jest 'the open section takes its content height and the next band follows it' and the 12-section short case; Galata the rewritten cap case, the stacked empty-home case and the 12-band 200px case green at retry 0, slow suite wf_20ec12a4-7f4 38/38, accept 81-accept.json
+  - related: ACC-BANDS-107-HARMONICA
+  - test: Galata: Show Volumes on with a short open band above a second band; the second band's top edge sits directly under the first band's last row; with rows taller than the panel the open section takes the panel and the other bands move away.
+  - test-tags: E2E
+  - mechanism: 2026-11-18T12:40:10Z @kj the owner refined the harmonica on 2026-11-18: a section shorter than the panel does not stretch; the bands stack from the top, and only a section whose rows exceed the available height takes the panel as the harmonica chapter describes
+  - log: 2026-11-18T12:40:10Z @kj added
+  - log: 2026-11-18T14:41:15Z @kj closed
 

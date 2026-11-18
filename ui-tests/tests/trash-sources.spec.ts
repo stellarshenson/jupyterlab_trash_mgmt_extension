@@ -36,6 +36,12 @@ import type { Route } from '@playwright/test';
  *   Volumes, with no check mark.
  * ACC-FILTER-105-QUERY: the header filter narrows the rows to the name or
  *   original path containing the text; clearing brings every row back.
+ * ACC-BANDS-107-HARMONICA: the panel-wide wheel drives the open section; at
+ *   the list's end it pulls the neighbour in and the event that reaches the
+ *   give length folds the section and opens the neighbour.
+ * ACC-BANDS-108-STACK: a short open section keeps its content height and the
+ *   next band follows under its last row; the section takes the remaining
+ *   height only when its rows exceed it.
  *
  * Every answer the section UI reads is stubbed with page.route, so the test
  * controls the data and reads nothing from the real trash. The main listing
@@ -221,6 +227,21 @@ const sectionList = (page: IJupyterLabPageFixture, id: string) =>
 const sectionRows = (page: IJupyterLabPageFixture, id: string) =>
   section(page, id).locator('.jp-TrashPanel-sectionRow');
 
+const sectionEntries = (page: IJupyterLabPageFixture, id: string) =>
+  section(page, id).locator('.jp-TrashPanel-sectionEntries');
+
+/** Click a folded band's fold toggle and wait for it to open. */
+async function openBand(
+  page: IJupyterLabPageFixture,
+  id: string
+): Promise<void> {
+  await sectionHeader(page, id).click();
+  await expect(sectionHeader(page, id)).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  );
+}
+
 test.use({ autoGoto: false });
 
 test('renders one section per source, in server order, with its own count and size', async ({
@@ -249,29 +270,31 @@ test('renders one section per source, in server order, with its own count and si
     '/home/alice (1 item, 7 KB)'
   );
 
-  // The home band sits above the main listing, which stays the xdg trash,
-  // and the other sections below it.
+  // The column is the summary bar's next sibling, the home section is its
+  // first child, and the main list lives in the home entries box.
   const placed = await page.evaluate(() => {
-    const main = document.querySelector('#jp-trash-panel .jp-TrashPanel-list');
+    const summary = document.querySelector(
+      '#jp-trash-panel .jp-TrashPanel-summary'
+    );
+    const column = document.querySelector(
+      '#jp-trash-panel .jp-TrashPanel-sections'
+    );
     const home = document.querySelector(
       '#jp-trash-panel .jp-TrashPanel-section[data-source="xdg"]'
     );
-    const first = document.querySelector(
-      '#jp-trash-panel .jp-TrashPanel-sections .jp-TrashPanel-section'
-    );
-    return (
-      main !== null &&
-      home !== null &&
-      first !== null &&
-      (main.compareDocumentPosition(home) &
-        Node.DOCUMENT_POSITION_PRECEDING) !==
-        0 &&
-      (main.compareDocumentPosition(first) &
-        Node.DOCUMENT_POSITION_FOLLOWING) !==
-        0
-    );
+    const entries = home?.querySelector('.jp-TrashPanel-sectionEntries');
+    const main = document.querySelector('#jp-trash-panel .jp-TrashPanel-list');
+    return {
+      summaryNext: summary?.nextElementSibling === column,
+      homeFirst: column?.firstElementChild === home,
+      mainInside: entries != null && main != null && entries.contains(main)
+    };
   });
-  expect(placed).toBe(true);
+  expect(placed).toEqual({
+    summaryNext: true,
+    homeFirst: true,
+    mainInside: true
+  });
   await expect(page.locator(`${PANEL} [data-source="xdg"]`)).toHaveCount(1);
   await expect(page.locator(`${PANEL} [data-source="home:bob"]`)).toHaveCount(
     0
@@ -287,7 +310,7 @@ test('renders one section per source, in server order, with its own count and si
   expect(occurrences).toEqual([1, 1]);
 });
 
-test('a header click collapses a section and the state survives a reload', async ({
+test('a header click opens a folded section and folds the open one, and the state survives a reload', async ({
   page
 }) => {
   await showVolumesOn(page);
@@ -298,25 +321,30 @@ test('a header click collapses a section and the state survives a reload', async
   await page.goto();
   await openPanel(page);
 
+  // A fresh key opens the home section alone
+  await expect(sectionHeader(page, 'xdg')).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  );
+  await expect(sectionHeader(page, 'cache')).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+
+  // A click on the folded cache band opens it and folds the home band
+  await sectionHeader(page, 'cache').click();
   await expect(sectionHeader(page, 'cache')).toHaveAttribute(
     'aria-expanded',
     'true'
   );
   await expect(sectionRows(page, 'cache')).toHaveCount(2);
-
-  await sectionHeader(page, 'cache').click();
-  await expect(sectionHeader(page, 'cache')).toHaveAttribute(
+  await expect(sectionList(page, 'cache')).toBeVisible();
+  await expect(sectionHeader(page, 'xdg')).toHaveAttribute(
     'aria-expanded',
     'false'
   );
-  await expect(sectionList(page, 'cache')).toBeHidden();
   await expect(sectionLabel(page, 'cache')).toHaveText(
     '/home/cache (2 items, 1.2 MB)'
-  );
-  // The other section is untouched by the toggle.
-  await expect(sectionHeader(page, 'home:alice')).toHaveAttribute(
-    'aria-expanded',
-    'true'
   );
 
   await page.reload();
@@ -324,24 +352,33 @@ test('a header click collapses a section and the state survives a reload', async
 
   await expect(sectionHeader(page, 'cache')).toHaveAttribute(
     'aria-expanded',
+    'true'
+  );
+  await expect(sectionHeader(page, 'xdg')).toHaveAttribute(
+    'aria-expanded',
     'false'
   );
-  await expect(sectionList(page, 'cache')).toBeHidden();
-  await expect(sectionLabel(page, 'cache')).toHaveText(
-    '/home/cache (2 items, 1.2 MB)'
-  );
-  await expect(sectionRows(page, 'home:alice')).toHaveCount(1);
+  await expect(sectionRows(page, 'cache')).toHaveCount(2);
 
+  // A click on the open cache band folds it, and every band is a band
   await sectionHeader(page, 'cache').click();
   await expect(sectionHeader(page, 'cache')).toHaveAttribute(
     'aria-expanded',
-    'true'
+    'false'
   );
-  await expect(sectionList(page, 'cache')).toBeVisible();
-  await expect(sectionRows(page, 'cache')).toHaveCount(2);
+  await expect(sectionList(page, 'cache')).toBeHidden();
+  for (const id of ['xdg', 'cache', 'home:alice']) {
+    await expect(sectionHeader(page, id)).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+  }
+  await expect(sectionLabel(page, 'cache')).toHaveText(
+    '/home/cache (2 items, 1.2 MB)'
+  );
 });
 
-test('Enter and Space on a focused header toggle its section', async ({
+test('Enter and Space on a focused header open and fold its section', async ({
   page
 }) => {
   await showVolumesOn(page);
@@ -357,14 +394,25 @@ test('Enter and Space on a focused header toggle its section', async ({
   await header.focus();
   await expect(header).toBeFocused();
 
+  // Enter opens the folded band and folds the home band
   await page.keyboard.press('Enter');
-  await expect(header).toHaveAttribute('aria-expanded', 'false');
-  await expect(sectionList(page, 'cache')).toBeHidden();
-
-  await page.keyboard.press('Space');
   await expect(header).toHaveAttribute('aria-expanded', 'true');
   await expect(sectionList(page, 'cache')).toBeVisible();
+  await expect(sectionHeader(page, 'xdg')).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+  await expect(header).toBeFocused();
 
+  // Space folds the now-open band and keeps the focus on it
+  await page.keyboard.press('Space');
+  await expect(header).toHaveAttribute('aria-expanded', 'false');
+  await expect(sectionList(page, 'cache')).toBeHidden();
+  await expect(header).toBeFocused();
+
+  // Reopen the home band so the main list shows, then Shift+Tab into it
+  await openBand(page, 'xdg');
+  await header.focus();
   // DEF-PANEL-34-FOCUS-RING: tabbing into the main list with no active row
   // makes its first row active, so the row ring shows where the focus is.
   const list = page.locator(`${PANEL} .jp-TrashPanel-list`);
@@ -414,15 +462,18 @@ test('a held source listing does not hold back another section', async ({
     // The route matched: the held source is pending, not absent.
     await aliceRequested;
 
-    // The cache section renders while home:alice is still unanswered.
+    // The cache section opens and shows its rows while home:alice is still
+    // unanswered; every listing is prefetched, so opening does not wait
+    await openBand(page, 'cache');
     await expect(sectionRows(page, 'cache')).toHaveCount(2);
     await expect(sectionRows(page, 'home:alice')).toHaveCount(0);
     await expect(sectionHeader(page, 'home:alice')).toHaveAttribute(
       'aria-expanded',
-      'true'
+      'false'
     );
 
     release();
+    await openBand(page, 'home:alice');
     await expect(sectionRows(page, 'home:alice')).toHaveCount(1);
   } finally {
     // Release any handler a tick started and drop the route, so the test
@@ -512,13 +563,16 @@ async function openLongSections(
   });
   await page.goto();
   await openPanel(page);
+  // Opening the cache band shows its rows without a wait: every listing is
+  // prefetched with Show Volumes on
+  await openBand(page, 'cache');
   await expect(sectionRows(page, 'cache')).toHaveCount(60);
-  await expect(sectionRows(page, 'home:alice')).toHaveCount(60);
 }
 
-// ACC-SCOPE-82-SECTION-SHARE: while the main list holds items, the sections
-// keep max-height 40 percent and scroll inside it.
-test('expanded sections keep a 40 percent cap and leave the main list its share', async ({
+// ACC-BANDS-108-STACK: the open section's entries box takes the column's
+// height less every band, and scrolls inside it; the folded bands stay on
+// screen. ACC-BANDS-107-HARMONICA overrides ACC-SCOPE-82-SECTION-SHARE.
+test('a long open section takes the remaining height and the folded bands stay on screen', async ({
   page
 }) => {
   await openLongSections(page, [
@@ -527,65 +581,112 @@ test('expanded sections keep a 40 percent cap and leave the main list its share'
     stubItem('main-c.txt', '1 KB')
   ]);
   await expect(page.locator(`${PANEL} .jp-TrashPanel-item`)).toHaveCount(3);
-  await expect(page.locator(PANEL)).not.toHaveClass(/\bjp-mod-empty\b/);
 
   const measured = await page.evaluate(() => {
     const panel = document.querySelector('#jp-trash-panel') as HTMLElement;
     panel.style.width = '480px';
     panel.style.height = '500px';
-    const list = panel.querySelector('.jp-TrashPanel-list') as HTMLElement;
-    const sections = panel.querySelector(
+    const column = panel.querySelector(
       '.jp-TrashPanel-sections'
     ) as HTMLElement;
-    const panelHeight = panel.getBoundingClientRect().height;
+    const entries = panel.querySelector(
+      '.jp-TrashPanel-section[data-source="cache"] .jp-TrashPanel-sectionEntries'
+    ) as HTMLElement;
+    const bandHeight = (id: string) =>
+      (
+        panel.querySelector(
+          `.jp-TrashPanel-section[data-source="${id}"] .jp-TrashPanel-sectionBand`
+        ) as HTMLElement
+      ).getBoundingClientRect().height;
+    // A static band is its section box less the entries box: the band plus
+    // the section's 1px borders, which the band rectangle alone omits
+    const staticBand = (id: string) => {
+      const section = panel.querySelector(
+        `.jp-TrashPanel-section[data-source="${id}"]`
+      ) as HTMLElement;
+      const entries = section.querySelector(
+        '.jp-TrashPanel-sectionEntries'
+      ) as HTMLElement;
+      return (
+        section.getBoundingClientRect().height -
+        entries.getBoundingClientRect().height
+      );
+    };
+    const aliceBand = panel.querySelector(
+      '.jp-TrashPanel-section[data-source="home:alice"] .jp-TrashPanel-sectionBand'
+    ) as HTMLElement;
+    const homeEntries = panel.querySelector(
+      '.jp-TrashPanel-section[data-source="xdg"] .jp-TrashPanel-sectionEntries'
+    ) as HTMLElement;
+    const columnBox = column.getBoundingClientRect();
+    const entriesBox = entries.getBoundingClientRect();
     return {
-      panelHeight,
-      listHeight: list.getBoundingClientRect().height,
-      sectionsHeight: sections.getBoundingClientRect().height,
-      sectionsMaxHeight: getComputedStyle(sections).maxHeight
+      panelHeight: panel.getBoundingClientRect().height,
+      columnHeight: columnBox.height,
+      entriesHeight: entriesBox.height,
+      bands: [bandHeight('xdg'), bandHeight('cache'), bandHeight('home:alice')],
+      staticBands: ['xdg', 'cache', 'home:alice'].map(staticBand),
+      scrollHeight: entries.scrollHeight,
+      clientHeight: entries.clientHeight,
+      aliceOnScreen:
+        aliceBand.getBoundingClientRect().bottom <= columnBox.bottom,
+      homeEntriesHidden: getComputedStyle(homeEntries).display === 'none'
     };
   });
 
-  // Chrome reports the specified 40% as-is; a browser that resolves it to
-  // pixels is accepted too.
-  const sectionsMaxPercent = measured.sectionsMaxHeight.endsWith('%')
-    ? Number.parseFloat(measured.sectionsMaxHeight)
-    : (Number.parseFloat(measured.sectionsMaxHeight) / measured.panelHeight) *
-      100;
-
   console.log(
-    `PANEL_HEIGHT=${measured.panelHeight} LIST_HEIGHT=${measured.listHeight} ` +
-      `SECTIONS_HEIGHT=${measured.sectionsHeight} ` +
-      `SECTIONS_MAX_HEIGHT=${measured.sectionsMaxHeight}`
+    `PANEL_HEIGHT=${measured.panelHeight} COLUMN_HEIGHT=${measured.columnHeight} ` +
+      `ENTRIES_HEIGHT=${measured.entriesHeight} BANDS=${measured.bands.join(',')}`
   );
 
   expect(measured.panelHeight).toBeCloseTo(500, 0);
-  // The sections must not squeeze the main list out of the panel.
-  expect(measured.listHeight).toBeGreaterThanOrEqual(
-    0.3 * measured.panelHeight
+  // Every band stays on screen at its 21px content height
+  for (const height of measured.bands) {
+    expect(height).toBeCloseTo(21, 0);
+  }
+  // The open entries box takes the column less the static bands and their
+  // section borders; the band rectangles alone are 3px short for three
+  // sections
+  const staticBands = measured.staticBands.reduce(
+    (sum, height) => sum + height,
+    0
   );
-  expect(sectionsMaxPercent).toBeCloseTo(40, 0);
-  expect(measured.sectionsHeight).toBeLessThanOrEqual(
-    (sectionsMaxPercent / 100) * measured.panelHeight + 1
-  );
+  expect(
+    Math.abs(measured.entriesHeight - (measured.columnHeight - staticBands))
+  ).toBeLessThanOrEqual(1);
+  // Its rows exceed it, so it scrolls and the last band stays on screen
+  expect(measured.scrollHeight).toBeGreaterThan(measured.clientHeight);
+  expect(measured.aliceOnScreen).toBe(true);
+  // The folded home band hides the main list in its entries box
+  expect(measured.homeEntriesHidden).toBe(true);
 });
 
-// ACC-SCOPE-82-SECTION-SHARE: with the main list empty, the panel carries
-// jp-mod-empty and the sections take the free height, with no blank band.
+// ACC-BANDS-108-STACK: a short open section keeps its content height, so the
+// next band follows its last row and the free space sits below the last band.
 // ACC-NAV-85-EMPTY-LINE: the 'Trash is empty' text starts within 12 px of the
 // panel's left edge, not centered.
-test('with an empty main list the sections reach the panel bottom', async ({
+test('with an empty open home section the next bands stack under its empty line', async ({
   page
 }) => {
   await openLongSections(page, []);
-  await expect(page.locator(PANEL)).toHaveClass(/\bjp-mod-empty\b/);
+  // Open the home section on the empty main list
+  await openBand(page, 'xdg');
+  const emptyLine = page.locator(`${PANEL} .jp-TrashPanel-empty`).first();
+  await expect(emptyLine).toBeVisible();
+  await expect(emptyLine).toHaveText('Trash is empty');
 
   const measured = await page.evaluate(() => {
     const panel = document.querySelector('#jp-trash-panel') as HTMLElement;
     panel.style.width = '480px';
     panel.style.height = '500px';
-    const sections = panel.querySelector(
-      '.jp-TrashPanel-sections'
+    const homeEntries = panel.querySelector(
+      '.jp-TrashPanel-section[data-source="xdg"] .jp-TrashPanel-sectionEntries'
+    ) as HTMLElement;
+    const cacheSection = panel.querySelector(
+      '.jp-TrashPanel-section[data-source="cache"]'
+    ) as HTMLElement;
+    const aliceSection = panel.querySelector(
+      '.jp-TrashPanel-section[data-source="home:alice"]'
     ) as HTMLElement;
     const panelRect = panel.getBoundingClientRect();
     // The text range, not the element box, which spans the panel width
@@ -596,19 +697,220 @@ test('with an empty main list the sections reach the panel bottom', async ({
     return {
       panelHeight: panelRect.height,
       panelBottom: panelRect.bottom,
-      sectionsBottom: sections.getBoundingClientRect().bottom,
-      sectionsMaxHeight: getComputedStyle(sections).maxHeight,
+      homeBottom: homeEntries.getBoundingClientRect().bottom,
+      cacheTop: cacheSection.getBoundingClientRect().top,
+      aliceTop: aliceSection.getBoundingClientRect().top,
+      cacheBottom: cacheSection.getBoundingClientRect().bottom,
+      aliceBottom: aliceSection.getBoundingClientRect().bottom,
       emptyTextInset: range.getBoundingClientRect().left - panelRect.left
     };
   });
 
   expect(measured.panelHeight).toBeCloseTo(500, 0);
-  expect(measured.sectionsMaxHeight).toBe('none');
-  expect(
-    Math.abs(measured.panelBottom - measured.sectionsBottom)
-  ).toBeLessThanOrEqual(2);
+  // The cache band follows the home entries box, and alice follows the cache
+  // band; no section stretches to the panel bottom, so the free space is
+  // below the last band
+  expect(Math.abs(measured.cacheTop - measured.homeBottom)).toBeLessThanOrEqual(
+    1
+  );
+  expect(measured.aliceTop).toBeGreaterThanOrEqual(measured.cacheBottom - 1);
+  expect(measured.aliceBottom).toBeLessThan(measured.panelBottom - 20);
   expect(measured.emptyTextInset).toBeGreaterThanOrEqual(0);
   expect(measured.emptyTextInset).toBeLessThanOrEqual(12);
+});
+
+// ACC-BANDS-107-HARMONICA: the wheel over the panel drives the open section;
+// at the list's end two 100px notches reach the give length and fold it into
+// the neighbour, and a notch during the fold does nothing.
+test('the wheel folds the open band at its end and short bands stack under it', async ({
+  page
+}) => {
+  await showVolumesOn(page);
+  await stubMainList(page, [
+    stubItem('main-a.txt', '1 KB'),
+    stubItem('main-b.txt', '1 KB')
+  ]);
+  await stubSources(
+    page,
+    [
+      {
+        ...SOURCES[0],
+        item_count: 2,
+        total_size: '2 KB',
+        total_bytes: 2048
+      },
+      SOURCES[1],
+      SOURCES[2]
+    ],
+    { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
+  );
+  await page.goto();
+  await openPanel(page);
+
+  // The home section is open and the cache band sits under its entries box
+  await expect(sectionHeader(page, 'xdg')).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  );
+  const stacked = await page.evaluate(() => {
+    const homeEntries = document.querySelector(
+      '#jp-trash-panel .jp-TrashPanel-section[data-source="xdg"] .jp-TrashPanel-sectionEntries'
+    ) as HTMLElement;
+    const cacheBand = document.querySelector(
+      '#jp-trash-panel .jp-TrashPanel-section[data-source="cache"] .jp-TrashPanel-sectionBand'
+    ) as HTMLElement;
+    return (
+      cacheBand.getBoundingClientRect().top -
+      homeEntries.getBoundingClientRect().bottom
+    );
+  });
+  expect(Math.abs(stacked)).toBeLessThanOrEqual(1);
+
+  // Two 100px notches add 25px each and give on the second; the third lands
+  // during the fold, where wheel events are cancelled and do nothing
+  const bar = page.locator(`${PANEL} .jp-TrashPanel-summary`);
+  await bar.hover();
+  await page.mouse.wheel(0, 100);
+  await page.mouse.wheel(0, 100);
+  await page.waitForTimeout(50);
+  await page.mouse.wheel(0, 100);
+  await page.waitForTimeout(500);
+
+  await expect(sectionHeader(page, 'cache')).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  );
+  await expect(sectionRows(page, 'cache')).toHaveCount(2);
+  await expect(sectionList(page, 'cache')).toBeVisible();
+  await expect(sectionHeader(page, 'xdg')).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+  await expect(sectionEntries(page, 'xdg')).toBeHidden();
+  // The fold crossed one section only, so the open section is cache
+  await expect(sectionHeader(page, 'home:alice')).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+
+  // The alice band follows the short cache entries box immediately
+  const aliceTop = await page.evaluate(() => {
+    const cacheEntries = document.querySelector(
+      '#jp-trash-panel .jp-TrashPanel-section[data-source="cache"] .jp-TrashPanel-sectionEntries'
+    ) as HTMLElement;
+    const aliceBand = document.querySelector(
+      '#jp-trash-panel .jp-TrashPanel-section[data-source="home:alice"] .jp-TrashPanel-sectionBand'
+    ) as HTMLElement;
+    return (
+      aliceBand.getBoundingClientRect().top -
+      cacheEntries.getBoundingClientRect().bottom
+    );
+  });
+  expect(Math.abs(aliceTop)).toBeLessThanOrEqual(1);
+});
+
+// ACC-BANDS-108-STACK: a panel shorter than its static bands scrolls the
+// column, so every band stays reachable; the wheel keeps the native scroll
+// instead of folding.
+test('a dozen bands in a short panel scroll the column instead of clipping', async ({
+  page
+}) => {
+  const shortSources: IStubSource[] = [
+    {
+      ...SOURCES[0],
+      item_count: 1,
+      total_size: '1 KB',
+      total_bytes: 1024
+    },
+    ...Array.from({ length: 11 }, (_, index) => ({
+      id: `home:s${index}`,
+      label: `/home/s${index}`,
+      item_count: 0,
+      total_size: '0 B',
+      total_bytes: 0,
+      error: ''
+    }))
+  ];
+  await showVolumesOn(page);
+  await stubMainList(page, [stubItem('main-a.txt', '1 KB')]);
+  await stubSources(page, shortSources, {});
+  await page.goto();
+  await openPanel(page);
+
+  // The 12 bands need 252px; a 200px panel leaves the column less than that
+  await page.evaluate(() => {
+    (document.querySelector('#jp-trash-panel') as HTMLElement).style.height =
+      '200px';
+  });
+  // A repaint measures the column and marks it short
+  await page.locator(`${PANEL} button[title="Refresh"]`).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document
+          .querySelector('#jp-trash-panel .jp-TrashPanel-sections')!
+          .classList.contains('jp-mod-short')
+      )
+    )
+    .toBe(true);
+
+  const measured = await page.evaluate(() => {
+    const column = document.querySelector(
+      '#jp-trash-panel .jp-TrashPanel-sections'
+    ) as HTMLElement;
+    const open = column.querySelector(
+      '.jp-TrashPanel-section:not(.jp-mod-collapsed)'
+    ) as HTMLElement;
+    const entries = open.querySelector(
+      '.jp-TrashPanel-sectionEntries'
+    ) as HTMLElement;
+    const lastBand = column.querySelector(
+      '.jp-TrashPanel-section:last-child .jp-TrashPanel-sectionBand'
+    ) as HTMLElement;
+    column.scrollTop = column.scrollHeight;
+    return {
+      overflowY: getComputedStyle(column).overflowY,
+      scrolls: column.scrollHeight > column.clientHeight,
+      openShrink: getComputedStyle(open).flexShrink,
+      entriesHeight: entries.getBoundingClientRect().height,
+      lastBandBottom: lastBand.getBoundingClientRect().bottom,
+      columnBottom: column.getBoundingClientRect().bottom
+    };
+  });
+  expect(measured.overflowY).toBe('auto');
+  expect(measured.scrolls).toBe(true);
+  // The open section keeps its natural height; the column is the scroller
+  expect(measured.openShrink).toBe('0');
+  expect(measured.entriesHeight).toBeGreaterThan(0);
+  // Scrolling the column reaches the last band
+  expect(measured.lastBandBottom).toBeLessThanOrEqual(
+    measured.columnBottom + 1
+  );
+
+  // A wheel over a band scrolls the column natively and folds nothing
+  await page.evaluate(() => {
+    (
+      document.querySelector(
+        '#jp-trash-panel .jp-TrashPanel-sections'
+      ) as HTMLElement
+    ).scrollTop = 0;
+  });
+  await sectionHeader(page, 'xdg').hover();
+  await page.mouse.wheel(0, 120);
+  await page.waitForTimeout(100);
+  const scrolled = await page.evaluate(
+    () =>
+      (
+        document.querySelector(
+          '#jp-trash-panel .jp-TrashPanel-sections'
+        ) as HTMLElement
+      ).scrollTop
+  );
+  expect(scrolled).toBeGreaterThan(0);
+  await expect(sectionHeader(page, 'xdg')).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  );
 });
 
 /**
@@ -650,7 +952,6 @@ async function stubLocation(page: IJupyterLabPageFixture): Promise<void> {
   });
   await page.goto();
   await openPanel(page);
-  await expect(sectionRows(page, LOCATION_ID)).toHaveCount(1);
 }
 
 test('a location trash is a section after the cache and home sections', async ({
@@ -664,6 +965,7 @@ test('a location trash is a section after the cache and home sections', async ({
       elements.map(element => (element as HTMLElement).dataset.source)
     );
   expect(order).toEqual(['xdg', 'cache', 'home:alice', LOCATION_ID]);
+  await openBand(page, LOCATION_ID);
   await expect(sectionLabel(page, LOCATION_ID)).toHaveText(
     '/mnt/data (1 item, 3 KB)'
   );
@@ -700,9 +1002,12 @@ test('right-click on a location row restores it with its source', async ({
     probe.remove();
     return color;
   });
+  // One section is open at rest, so each row is hovered while its band is
+  await openBand(page, 'cache');
   const cacheRow = sectionRows(page, 'cache').first();
   await cacheRow.hover();
   await expect.poll(() => background(cacheRow)).toBe(hoverColor);
+  await openBand(page, LOCATION_ID);
   const locationRow = sectionRows(page, LOCATION_ID);
   await locationRow.hover();
   await expect.poll(() => background(locationRow)).toBe(hoverColor);
@@ -722,6 +1027,7 @@ test('Shift+F10 on a focused location row opens the Restore menu', async ({
   page
 }) => {
   await stubLocation(page);
+  await openBand(page, LOCATION_ID);
 
   const row = sectionRows(page, LOCATION_ID);
   await row.focus();
@@ -748,6 +1054,7 @@ test('right-click on a cache row restores it with its source', async ({
     });
   });
   await stubLocation(page);
+  await openBand(page, 'cache');
 
   await sectionRows(page, 'cache').first().click({ button: 'right' });
   await expect(restoreMenuItem(page)).toBeVisible();
@@ -783,7 +1090,11 @@ test('a right-click on the header turns Show Volumes on and the sections show', 
   await expect(showVolumesItem(page)).toBeVisible();
   await showVolumesItem(page).click();
 
+  await expect(page.locator(`${PANEL} .jp-TrashPanel-section`)).toHaveCount(3);
+  // One section opens at rest: each other band opens to show its rows
+  await openBand(page, 'cache');
   await expect(sectionRows(page, 'cache')).toHaveCount(2);
+  await openBand(page, 'home:alice');
   await expect(sectionRows(page, 'home:alice')).toHaveCount(1);
 });
 
@@ -821,6 +1132,7 @@ test('with Show Volumes off the xdg and location rows are one list', async ({
     await item(page).click();
   };
   await toggleShowVolumes(showVolumesItem);
+  await openBand(page, LOCATION_ID);
   await expect(sectionRows(page, LOCATION_ID)).toHaveCount(1);
   await expect(sectionRows(page, LOCATION_ID)).toContainText('data.csv');
   await expect(items).toHaveCount(1);
@@ -858,6 +1170,7 @@ test('a right-click on the main list empty space or a section band toggles Show 
   });
   await expect(showVolumesItem(page)).toBeVisible();
   await showVolumesItem(page).click();
+  await openBand(page, 'cache');
   await expect(sectionRows(page, 'cache')).toHaveCount(2);
 
   await section(page, 'cache')
@@ -994,6 +1307,8 @@ test("a band's trash button names its own source in the dialog", async ({
   page
 }) => {
   await stubLocation(page);
+  // The harmonica opens one section at rest; open the band whose button empties it
+  await openBand(page, LOCATION_ID);
 
   await section(page, LOCATION_ID)
     .locator('.jp-TrashPanel-sectionEmpty')
@@ -1052,6 +1367,7 @@ test('a keyboard empty from a band button leaves the focus on its fold toggle', 
   );
   await page.goto();
   await openPanel(page);
+  await openBand(page, LOCATION_ID);
   await expect(sectionRows(page, LOCATION_ID)).toHaveCount(1);
 
   const toggle = sectionHeader(page, LOCATION_ID);
@@ -1260,6 +1576,7 @@ test('a band with a long label stays one 21px line at 280px and keeps its count'
   );
   await page.goto();
   await openPanel(page);
+  await openBand(page, id);
   await expect(sectionRows(page, id)).toHaveCount(1);
 
   await page.evaluate(() => {
@@ -1451,6 +1768,9 @@ test('with Show Volumes on, an empty location band shows Trash is empty and its 
   await openPanel(page);
 
   const line = section(page, LOCATION_ID).locator('.jp-TrashPanel-empty');
+  // The folded band shows no line; opening it shows the empty line
+  await expect(line).toBeHidden();
+  await openBand(page, LOCATION_ID);
   await expect(line).toBeVisible();
   await expect(line).toHaveText('Trash is empty');
   await expect(line).toHaveCSS('font-style', 'italic');
@@ -1521,7 +1841,15 @@ test('the home band sits under the summary bar behind a layout-color3 line, fold
   await page.goto();
   await openPanel(page);
   await expect(sectionLabel(page, 'xdg')).toHaveText('~ (2 items, 2.0 KB)');
+
+  // Show the cache rows, then reopen the home section for the fold case
+  await openBand(page, 'cache');
   await expect(sectionRows(page, 'cache')).toHaveCount(2);
+  await openBand(page, 'xdg');
+  await expect(sectionHeader(page, 'xdg')).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  );
   await expect(page.locator(`${PANEL} .jp-TrashPanel-item`)).toHaveCount(2);
 
   // The total line is the sum of every band's count
@@ -1541,7 +1869,10 @@ test('the home band sits under the summary bar behind a layout-color3 line, fold
   const geometry = await page.evaluate(() => {
     const panel = document.querySelector('#jp-trash-panel') as HTMLElement;
     const bar = panel.querySelector('.jp-TrashPanel-summary') as HTMLElement;
-    const home = panel.querySelector(
+    const column = panel.querySelector(
+      '.jp-TrashPanel-sections'
+    ) as HTMLElement;
+    const home = column.querySelector(
       '.jp-TrashPanel-section[data-source="xdg"]'
     ) as HTMLElement;
     const band = home.querySelector(
@@ -1555,7 +1886,8 @@ test('the home band sits under the summary bar behind a layout-color3 line, fold
     probe.remove();
     const line = getComputedStyle(home);
     return {
-      next: bar.nextElementSibling === home,
+      next: bar.nextElementSibling === column,
+      homeFirst: column.firstElementChild === home,
       barLine: getComputedStyle(bar).borderBottomWidth,
       barBottom: bar.getBoundingClientRect().bottom,
       bandTop: band.getBoundingClientRect().top,
@@ -1567,6 +1899,7 @@ test('the home band sits under the summary bar behind a layout-color3 line, fold
     };
   });
   expect(geometry.next).toBe(true);
+  expect(geometry.homeFirst).toBe(true);
   expect(geometry.barLine).toBe('0px');
   expect(geometry.lineWidth).toBe('1px');
   expect(geometry.lineStyle).toBe('solid');
@@ -1644,6 +1977,12 @@ test('a band whose listing fails draws a 1px layout-color3 line above the next b
   });
   await page.goto();
   await openPanel(page);
+  // The cache band is folded at load; open it to show the failed listing
+  await expect(sectionHeader(page, 'cache')).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+  await openBand(page, 'cache');
   await expect(sectionLabel(page, 'cache')).toHaveText(/^\/home\/cache: /);
   await expect(sectionHeader(page, 'cache')).toHaveAttribute(
     'aria-expanded',
