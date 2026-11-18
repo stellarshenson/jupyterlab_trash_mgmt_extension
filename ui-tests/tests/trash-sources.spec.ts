@@ -947,6 +947,49 @@ test('the header trash button lists every source in its dialog', async ({
   await cancelDialog(page);
 });
 
+// ACC-SCOPE-106-CLEAN-REPORT: an accepted Empty All Bins reports the totals in
+// a success notification, and no result dialog stays open.
+test('an accepted Empty All Bins reports in a success notification', async ({
+  page
+}) => {
+  await page.route('**/jupyterlab-trash-mgmt-extension/empty*', route =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        deleted_count: 3,
+        sources: [
+          { id: 'xdg', label: 'Trash', deleted_count: 2, errors: [] },
+          { id: 'cache', label: '/home/cache', deleted_count: 1, errors: [] },
+          {
+            id: 'home:alice',
+            label: '/home/alice',
+            deleted_count: 0,
+            errors: []
+          },
+          {
+            id: LOCATION_ID,
+            label: '/mnt/data',
+            deleted_count: 0,
+            errors: []
+          }
+        ]
+      })
+    })
+  );
+  await stubLocation(page);
+
+  await page.locator(`${PANEL} .jp-TrashPanel-header-button-danger`).click();
+  await expect(dialog(page)).toContainText('Empty All Bins');
+  await dialog(page).getByRole('button', { name: 'Empty All Bins' }).click();
+
+  const toast = page.locator('.jp-Notification-Toast-success');
+  await expect(toast).toHaveCount(1);
+  await expect(toast).toContainText('3 items deleted');
+  await expect(dialog(page)).toHaveCount(0);
+});
+
 test("a band's trash button names its own source in the dialog", async ({
   page
 }) => {

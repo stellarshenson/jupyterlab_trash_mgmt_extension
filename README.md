@@ -31,7 +31,7 @@ A dedicated left panel for managing your JupyterLab trash. See what's taking up 
 - **Keyboard control** - Tab to the list, move with the arrow keys, select with Space, open a folder with Enter and reach Restore and Delete with Shift+F10
 - **Motion that carries meaning** - the loading ring keeps turning under every system preference, while the refresh button stays static
 - **Large trash** - Emptying tens of thousands of items no longer blocks the rest of the lab
-- **Empty bin** - The header trash button empties every trash at once
+- **Empty bin** - The header trash button empties every trash at once and the outcome is reported in a notification with the totals; a trash that cannot be read or that vanishes is reported as an error
 - **Server-side integration** - Python backend for reliable trash operations
 
 ## Installation

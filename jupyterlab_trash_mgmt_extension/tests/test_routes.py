@@ -15,8 +15,10 @@ import pytest
 from jupyterlab_trash_mgmt_extension import routes
 from jupyterlab_trash_mgmt_extension.routes import (
     clear_dir_sizes,
+    collect_listing,
     collect_sources,
     delete_item,
+    empty_source,
     empty_trash,
     format_size,
     get_dir_size,
@@ -724,6 +726,208 @@ class TestEmptyScopes:
         assert not (trash_dir / "info" / "inside.txt.trashinfo").exists()
         assert (trash_dir / "info" / "outside.txt.trashinfo").exists()
         assert sorted(p.name for p in (cache / "files").iterdir()) == ["elsewhere.txt"]
+
+    def test_scope_workspace_reports_a_source_that_cannot_be_read(
+        self, trash_dir, tmp_path, monkeypatch
+    ):
+        """A source that raises is reported without losing the response."""
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        workspace = tmp_path / "workspace"
+        cache = make_trash(homes / "cache")
+        add_trash_item(cache, "cached.txt", str(workspace / "cached.txt"), "abc")
+        add_trash_item(cache, "kept.txt", str(tmp_path / "elsewhere.txt"), "keep")
+
+        # The XDG trash holds a plain file where its files folder belongs
+        (trash_dir / "files").rmdir()
+        (trash_dir / "files").write_text("not a directory")
+
+        status, body = empty_trash("workspace", str(workspace))
+
+        assert status is None
+        assert body["success"] is False
+        by_id = {source["id"]: source for source in body["sources"]}
+        assert by_id["xdg"]["errors"]
+        assert by_id["cache"]["deleted_count"] == 1
+        assert by_id["cache"]["left_count"] == 1
+        assert "left_count" not in body
+        assert not (cache / "files" / "cached.txt").exists()
+        assert (cache / "files" / "kept.txt").exists()
+
+    def test_scope_workspace_reports_an_unsearchable_source(
+        self, trash_dir, tmp_path, monkeypatch
+    ):
+        """A source that denies search is reported, not silently emptied."""
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        workspace = tmp_path / "workspace"
+        cache = make_trash(homes / "cache")
+        add_trash_item(cache, "cached.txt", str(workspace / "cached.txt"), "abc")
+        add_trash_item(cache, "kept.txt", str(tmp_path / "elsewhere.txt"), "keep")
+
+        trash_dir.chmod(0o000)
+        try:
+            status, body = empty_trash("workspace", str(workspace))
+        finally:
+            trash_dir.chmod(0o755)
+
+        assert status is None
+        assert body["success"] is False
+        by_id = {source["id"]: source for source in body["sources"]}
+        assert by_id["xdg"]["errors"]
+        assert "left_count" not in body
+        assert by_id["cache"]["deleted_count"] == 1
+        assert not (cache / "files" / "cached.txt").exists()
+        assert (cache / "files" / "kept.txt").exists()
+
+    def test_scope_all_reports_an_unsearchable_source(self, trash_dir):
+        """The all scope reports a source whose files folder denies reading."""
+        trash_dir.chmod(0o000)
+        try:
+            status, body = empty_trash("all")
+        finally:
+            trash_dir.chmod(0o755)
+
+        assert status is None
+        assert body["success"] is False
+        by_id = {source["id"]: source for source in body["sources"]}
+        assert by_id["xdg"]["errors"]
+
+    def test_sources_report_an_unsearchable_source(self, trash_dir):
+        """A source whose files folder denies reading carries the error."""
+        trash_dir.chmod(0o000)
+        try:
+            sources = collect_sources()
+        finally:
+            trash_dir.chmod(0o755)
+
+        by_id = {source["id"]: source for source in sources}
+        assert by_id["xdg"]["error"]
+
+    def test_a_source_that_cannot_be_traversed_is_reported(
+        self, trash_dir, tmp_path, monkeypatch
+    ):
+        """A home that denies traversal is reported, not dropped from the clean."""
+        homes = tmp_path / "homes"
+        monkeypatch.setattr(routes, "HOMES_ROOT", homes)
+        cache = make_trash(homes / "cache")
+        add_trash_item(cache, "cached.txt", "/home/cache/cached.txt", "abc")
+        bob_home = homes / "bob"
+        bob = make_trash(bob_home / ".local" / "share" / "Trash")
+        add_trash_item(bob, "bob.txt", "/home/bob/bob.txt", "abc")
+
+        bob_home.chmod(0o000)
+        try:
+            sources = collect_sources()
+            status, body = empty_trash("all")
+        finally:
+            bob_home.chmod(0o755)
+
+        by_id = {source["id"]: source for source in sources}
+        assert by_id["home:bob"]["error"]
+        assert status is None
+        assert body["success"] is False
+        by_id = {source["id"]: source for source in body["sources"]}
+        assert by_id["home:bob"]["errors"]
+        assert by_id["cache"]["deleted_count"] == 1
+        assert not (cache / "files" / "cached.txt").exists()
+
+    def test_a_source_that_vanishes_before_the_run_is_reported(
+        self, tmp_path, monkeypatch
+    ):
+        """A source enumerated before the run and gone at the run is reported."""
+        gone = tmp_path / "gone"
+        monkeypatch.setattr(
+            routes,
+            "existing_sources",
+            lambda locations=(): [{'id': 'xdg', 'label': '~', 'directory': gone}],
+        )
+
+        status, body = empty_trash("all")
+
+        assert status is None
+        assert body["success"] is False
+        by_id = {source["id"]: source for source in body["sources"]}
+        assert by_id["xdg"]["errors"]
+        assert by_id["xdg"]["deleted_count"] == 0
+
+        status, body = empty_trash("workspace", str(tmp_path))
+
+        assert status is None
+        assert "left_count" not in body
+
+    def test_listing_reports_an_unsearchable_root(self, trash_dir):
+        """A files folder that denies reading is a server error, not an empty trash."""
+        trash_dir.chmod(0o000)
+        try:
+            status, body = collect_listing("")
+        finally:
+            trash_dir.chmod(0o755)
+
+        assert status == 500
+        assert body["error"]
+
+    def test_empty_source_keeps_every_trashinfo_when_files_is_unreadable(self, tmp_path):
+        """An unreadable files folder keeps the trashinfo: Restore still needs it."""
+        trash = make_trash(tmp_path / "Trash")
+        add_trash_item(trash, "a.txt", "/home/user/a.txt", "x")
+
+        (trash / "files").chmod(0o000)
+        try:
+            deleted, errors = empty_source(trash)
+        finally:
+            (trash / "files").chmod(0o755)
+
+        assert deleted == 0
+        assert errors
+        assert (trash / "info" / "a.txt.trashinfo").exists()
+        assert (trash / "files" / "a.txt").exists()
+
+    def test_empty_source_keeps_every_trashinfo_when_files_is_not_searchable(
+        self, tmp_path
+    ):
+        """A files folder without search keeps the entry and its trashinfo."""
+        trash = make_trash(tmp_path / "Trash")
+        add_trash_item(trash, "a.txt", "/home/user/a.txt", "x")
+
+        (trash / "files").chmod(0o644)
+        try:
+            deleted, errors = empty_source(trash)
+        finally:
+            (trash / "files").chmod(0o755)
+
+        assert deleted == 0
+        assert errors
+        assert (trash / "files" / "a.txt").exists()
+        assert (trash / "info" / "a.txt.trashinfo").exists()
+
+    def test_empty_source_reports_an_unsearchable_info_dir(self, tmp_path):
+        """An info folder that cannot be listed keeps its trashinfo and is reported."""
+        trash = make_trash(tmp_path / "Trash")
+        add_trash_item(trash, "a.txt", "/home/user/a.txt", "x")
+
+        (trash / "info").chmod(0o000)
+        try:
+            deleted, errors = empty_source(trash)
+        finally:
+            (trash / "info").chmod(0o755)
+
+        assert deleted == 1
+        assert errors
+        assert (trash / "info" / "a.txt.trashinfo").exists()
+
+    def test_listing_reports_an_unsearchable_folder(self, trash_dir):
+        """A folder under a trash root without search is a server error, not 404."""
+        (trash_dir / "files" / "sub").mkdir()
+
+        trash_dir.chmod(0o000)
+        try:
+            status, body = collect_listing("sub", trash_dir)
+        finally:
+            trash_dir.chmod(0o755)
+
+        assert status == 500
+        assert body["error"]
 
     def test_absent_scope_keeps_the_single_trash_behaviour(
         self, trash_dir, tmp_path, monkeypatch

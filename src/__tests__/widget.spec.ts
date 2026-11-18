@@ -5,7 +5,11 @@
 import { ServerConnection } from '@jupyterlab/services';
 import { PageConfig } from '@jupyterlab/coreutils';
 import { MessageLoop } from '@lumino/messaging';
-import { showDialog, showErrorMessage } from '@jupyterlab/apputils';
+import {
+  showDialog,
+  showErrorMessage,
+  Notification
+} from '@jupyterlab/apputils';
 import { requestAPI } from '../request';
 import { TrashWidget } from '../widget';
 
@@ -14,6 +18,7 @@ jest.mock('../request', () => ({ requestAPI: jest.fn() }));
 jest.mock('@jupyterlab/apputils', () => ({
   showDialog: jest.fn(),
   showErrorMessage: jest.fn(),
+  Notification: { emit: jest.fn() },
   Dialog: { cancelButton: jest.fn(), warnButton: jest.fn() }
 }));
 
@@ -337,6 +342,7 @@ beforeEach(() => {
   request.mockReset();
   (showErrorMessage as jest.Mock).mockReset();
   (showDialog as jest.Mock).mockReset();
+  (Notification.emit as jest.Mock).mockReset();
   window.localStorage.clear();
 });
 
@@ -1914,6 +1920,7 @@ describe('Empty Trash', () => {
       'Empty All Bins Failed',
       'Trash: 0 items deleted\nTrash: one.txt: denied'
     );
+    expect(Notification.emit).not.toHaveBeenCalled();
   });
 
   it('returns to the top level from inside a folder', async () => {
@@ -1930,6 +1937,20 @@ describe('Empty Trash', () => {
     expect(breadcrumb(widget).hidden).toBe(true);
     expect(summary(widget).textContent).toBe('0 items · 0 B');
     expect(showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it('reports zero deleted rather than an empty notice', async () => {
+    const widget = await open({ list: listOf([file('one.txt')]) });
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    serve({
+      list: listOf([]),
+      empty: { success: true, deleted_count: 0, sources: [] }
+    });
+
+    emptyButton(widget).click();
+    await settle();
+    const [message] = (Notification.emit as jest.Mock).mock.calls[0];
+    expect(message).toBe('0 items deleted');
   });
 });
 
@@ -2138,7 +2159,8 @@ describe('trash sources', () => {
       deleted_count: 3,
       sources: [
         { id: 'xdg', label: 'Trash', deleted_count: 1, errors: [] },
-        { id: 'cache', label: '/home/cache', deleted_count: 2, errors: [] }
+        { id: 'cache', label: '/home/cache', deleted_count: 2, errors: [] },
+        { id: 'home:alice', label: '/home/alice', deleted_count: 0, errors: [] }
       ]
     };
     serve(routes);
@@ -2156,9 +2178,10 @@ describe('trash sources', () => {
     expect(JSON.parse(empty[2].body)).toEqual({ scope: 'all' });
 
     // The run reports its per-source counts afterwards
-    const report = (showDialog as jest.Mock).mock.calls[1][0];
-    expect(report.body).toContain('Trash: 1 item deleted');
-    expect(report.body).toContain('/home/cache: 2 items deleted');
+    expect(showDialog).toHaveBeenCalledTimes(1);
+    const [message, type] = (Notification.emit as jest.Mock).mock.calls[0];
+    expect(message).toBe('3 items deleted');
+    expect(type).toBe('success');
   });
 
   it('names the workspace root and posts scope workspace', async () => {
@@ -2172,7 +2195,8 @@ describe('trash sources', () => {
       left_count: 3,
       sources: [
         { id: 'xdg', label: 'Trash', deleted_count: 1, errors: [] },
-        { id: 'cache', label: '/home/cache', deleted_count: 1, errors: [] }
+        { id: 'cache', label: '/home/cache', deleted_count: 1, errors: [] },
+        { id: 'home:alice', label: '/home/alice', deleted_count: 0, errors: [] }
       ]
     };
     serve(routes);
@@ -2191,9 +2215,157 @@ describe('trash sources', () => {
     expect(JSON.parse(empty[2].body)).toEqual({ scope: 'workspace' });
 
     // The run reports the per-source counts and the left count
-    const report = (showDialog as jest.Mock).mock.calls[1][0];
-    expect(report.body).toContain('Trash: 1 item deleted');
-    expect(report.body).toContain('3 items left');
+    expect(showDialog).toHaveBeenCalledTimes(1);
+    const [message, type] = (Notification.emit as jest.Mock).mock.calls[0];
+    expect(message).toBe('2 items deleted; 3 items left');
+    expect(type).toBe('success');
+  });
+
+  it('reports a confirmed source the empty answer omits as no longer available', async () => {
+    const routes = sourcedRoutes();
+    routes.sources = [
+      sourceOf('xdg', 1, '5 B'),
+      sourceOf('cache', 12, '40 MB')
+    ];
+    const widget = await open(routes);
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    routes.empty = {
+      success: true,
+      deleted_count: 1,
+      sources: [{ id: 'xdg', label: 'Trash', deleted_count: 1, errors: [] }]
+    };
+    serve(routes);
+
+    await (widget as any)._commands.execute('trash:clean-all');
+    await settle();
+
+    expect(showErrorMessage).toHaveBeenCalledTimes(1);
+    const [title, body] = (showErrorMessage as jest.Mock).mock.calls[0];
+    expect(title).toBe('Empty All Bins Failed');
+    expect(body).toContain('the source is no longer available');
+    expect(body).toContain('/home/cache');
+    expect(Notification.emit).not.toHaveBeenCalled();
+  });
+
+  it('uses the singular left noun when the run leaves one item', async () => {
+    PageConfig.setOption('serverRoot', '/home/lab/workspace');
+    const widget = await open(sourcedRoutes());
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const routes = sourcedRoutes();
+    routes.empty = {
+      success: true,
+      deleted_count: 2,
+      left_count: 1,
+      sources: [
+        { id: 'xdg', label: 'Trash', deleted_count: 1, errors: [] },
+        { id: 'cache', label: '/home/cache', deleted_count: 1, errors: [] },
+        { id: 'home:alice', label: '/home/alice', deleted_count: 0, errors: [] }
+      ]
+    };
+    serve(routes);
+
+    await (widget as any)._commands.execute('trash:clean-workspace');
+    await settle();
+
+    const [message] = (Notification.emit as jest.Mock).mock.calls[0];
+    expect(message).toBe('2 items deleted; 1 item left');
+  });
+
+  it('uses the plural left noun when one item is deleted and three are left', async () => {
+    PageConfig.setOption('serverRoot', '/home/lab/workspace');
+    const widget = await open(sourcedRoutes());
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const routes = sourcedRoutes();
+    routes.empty = {
+      success: true,
+      deleted_count: 1,
+      left_count: 3,
+      sources: [
+        { id: 'xdg', label: 'Trash', deleted_count: 1, errors: [] },
+        { id: 'cache', label: '/home/cache', deleted_count: 0, errors: [] },
+        { id: 'home:alice', label: '/home/alice', deleted_count: 0, errors: [] }
+      ]
+    };
+    serve(routes);
+
+    await (widget as any)._commands.execute('trash:clean-workspace');
+    await settle();
+
+    const [message] = (Notification.emit as jest.Mock).mock.calls[0];
+    expect(message).toBe('1 item deleted; 3 items left');
+  });
+
+  it('keeps the notification within the cap with eight sources', async () => {
+    PageConfig.setOption('serverRoot', '/home/lab/workspace');
+    const widget = await open(sourcedRoutes());
+    (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
+    const routes = sourcedRoutes();
+    routes.empty = {
+      success: true,
+      deleted_count: 8,
+      left_count: 9,
+      sources: [
+        { id: 'xdg', label: '~', deleted_count: 1, errors: [] },
+        { id: 'cache', label: '/home/cache', deleted_count: 0, errors: [] },
+        {
+          id: 'home:alice',
+          label: '/home/alice',
+          deleted_count: 0,
+          errors: []
+        },
+        {
+          id: 'home:student01',
+          label: '/home/student01',
+          deleted_count: 1,
+          errors: []
+        },
+        {
+          id: 'home:student02',
+          label: '/home/student02',
+          deleted_count: 1,
+          errors: []
+        },
+        {
+          id: 'home:student03',
+          label: '/home/student03',
+          deleted_count: 1,
+          errors: []
+        },
+        {
+          id: 'home:student04',
+          label: '/home/student04',
+          deleted_count: 1,
+          errors: []
+        },
+        {
+          id: 'home:student05',
+          label: '/home/student05',
+          deleted_count: 1,
+          errors: []
+        },
+        {
+          id: 'home:student06',
+          label: '/home/student06',
+          deleted_count: 1,
+          errors: []
+        },
+        {
+          id: 'home:student07',
+          label: '/home/student07',
+          deleted_count: 1,
+          errors: []
+        }
+      ]
+    };
+    serve(routes);
+
+    await (widget as any)._commands.execute('trash:clean-workspace');
+    await settle();
+
+    const [message, type] = (Notification.emit as jest.Mock).mock.calls[0];
+    expect(type).toBe('success');
+    expect(message).toBe('8 items deleted; 9 items left');
+    expect(message.length).toBeLessThanOrEqual(140);
   });
 
   it('renders no section for an absent source and an error header for an unreadable one', async () => {
@@ -3376,7 +3548,13 @@ describe('trash buttons', () => {
       (showDialog as jest.Mock).mockResolvedValue({ button: { accept: true } });
       serve({
         ...locationOnlyRoutes(),
-        empty: { success: true, deleted_count: 2, sources: [] }
+        empty: {
+          success: true,
+          deleted_count: 2,
+          sources: [
+            { id: LOCATION, label: '/mnt/data', deleted_count: 2, errors: [] }
+          ]
+        }
       });
       emptyButton(widget).click();
       await settle();

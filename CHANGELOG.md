@@ -2,6 +2,19 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.33] - 2026-11-18
+
+### Changed
+
+- Empty All Bins and Clean Workspace report their outcome in a 3 second success notification with the total deleted count and the left count when known; the result dialog with Ok is gone
+- The confirmation before the run still lists each source with its count and size; a failure opens the error dialog with the per-source counts and errors
+
+### Fixed
+
+- A trashed source that cannot be read, or that vanishes while the run proceeds, is reported as an error instead of an empty trash
+- A workspace clean whose source raised an error answers with the per-source errors instead of a 500
+- The trashinfo of an entry that could not be removed survives an unreadable files or info directory, so Restore keeps its original path
+
 ## [1.1.32] - 2026-11-18
 
 ### Added

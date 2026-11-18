@@ -1,5 +1,10 @@
 import { Widget } from '@lumino/widgets';
-import { showDialog, Dialog, showErrorMessage } from '@jupyterlab/apputils';
+import {
+  showDialog,
+  Dialog,
+  showErrorMessage,
+  Notification
+} from '@jupyterlab/apputils';
 import { PageConfig } from '@jupyterlab/coreutils';
 import { nullTranslator } from '@jupyterlab/translation';
 import { Menu } from '@lumino/widgets';
@@ -2196,6 +2201,21 @@ export class TrashWidget extends Widget {
     } finally {
       this._setLoading(false);
     }
+    // The server enumerates again: a confirmed source it omits has vanished
+    const confirmed = sources.filter(source => source.item_count > 0);
+    const answered = new Set((response.sources ?? []).map(entry => entry.id));
+    const missing = confirmed.filter(source => !answered.has(source.id));
+    if (missing.length > 0) {
+      response.sources = [
+        ...(response.sources ?? []),
+        ...missing.map(source => ({
+          id: source.id,
+          label: source.label,
+          deleted_count: 0,
+          errors: [trans.__('the source is no longer available')]
+        }))
+      ];
+    }
     const clean = new Set(
       (response.sources ?? [])
         .filter(entry => entry.errors.length === 0)
@@ -2313,7 +2333,22 @@ export class TrashWidget extends Widget {
       );
       return;
     }
-    await showDialog({ title, body: lines.join('\n') });
+    // The 140-character notification cap and unbounded sources mean totals
+    // only; the confirmation lists each source with its count and size.
+    const deletedNoun =
+      result.deleted_count === 1 ? trans.__('item') : trans.__('items');
+    let message = trans.__('%1 %2 deleted', result.deleted_count, deletedNoun);
+    if (result.left_count !== undefined) {
+      const leftNoun =
+        result.left_count === 1 ? trans.__('item') : trans.__('items');
+      message = trans.__(
+        '%1; %2 %3 left',
+        message,
+        result.left_count,
+        leftNoun
+      );
+    }
+    Notification.emit(message, 'success', { autoClose: 3000 });
   }
 
   /**

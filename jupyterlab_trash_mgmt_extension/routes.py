@@ -300,14 +300,17 @@ def collect_listing(
         except ValueError as e:
             return 400, {'error': str(e)}
 
-        # A symlink is never followed, it would list a folder outside the trash
-        if listed.is_symlink():
-            return 400, {'error': 'Invalid trash path'}
-
-        if not listed.exists():
+        # A symlink is never followed, it would list a folder outside the trash.
+        # Path.exists() reads EACCES as absent; lstat and stat report it.
+        try:
+            if stat.S_ISLNK(os.lstat(listed).st_mode):
+                return 400, {'error': 'Invalid trash path'}
+            mode = os.stat(listed).st_mode
+        except FileNotFoundError:
             return 404, {'error': 'Folder not found in trash'}
-
-        if not listed.is_dir():
+        except OSError as error:
+            return 500, {'error': str(error)}
+        if not stat.S_ISDIR(mode):
             return 400, {'error': 'Not a folder'}
 
     # Inside a folder every entry shares the trashinfo of the top-level item
@@ -317,44 +320,47 @@ def collect_listing(
     names = set()
     total_size = 0
 
-    if listed.exists():
-        try:
-            entries = list(listed.iterdir())
-        except FileNotFoundError:
-            # The folder was removed after the checks above
+    try:
+        entries = list(listed.iterdir())
+    except FileNotFoundError:
+        # A missing folder is a removed folder, or an empty trash without one
+        if folder:
             return 404, {'error': 'Folder not found in trash'}
-        for entry in entries:
-            names.add(entry.name)
-            try:
-                if folder_metadata is None:
-                    trash_path = entry.name
-                    metadata = get_trash_metadata(trash_path, trash_dir, location)
-                else:
-                    trash_path = f"{folder}/{entry.name}"
-                    original_path = folder_metadata['original_path']
-                    metadata = {
-                        'original_path': str(Path(original_path) / entry.name) if original_path else '',
-                        'deletion_date': folder_metadata['deletion_date']
-                    }
+        entries = []
+    except OSError as error:
+        return 500, {'error': str(error)}
+    for entry in entries:
+        names.add(entry.name)
+        try:
+            if folder_metadata is None:
+                trash_path = entry.name
+                metadata = get_trash_metadata(trash_path, trash_dir, location)
+            else:
+                trash_path = f"{folder}/{entry.name}"
+                original_path = folder_metadata['original_path']
+                metadata = {
+                    'original_path': str(Path(original_path) / entry.name) if original_path else '',
+                    'deletion_date': folder_metadata['deletion_date']
+                }
 
-                size = get_item_size(entry)
-                total_size += size
+            size = get_item_size(entry)
+            total_size += size
 
-                is_dir = entry.is_dir()
-                is_symlink = entry.is_symlink()
+            is_dir = entry.is_dir()
+            is_symlink = entry.is_symlink()
 
-                items.append({
-                    'name': entry.name,
-                    'trash_path': trash_path,
-                    'original_path': metadata.get('original_path', ''),
-                    'deletion_date': metadata.get('deletion_date', ''),
-                    'size': size,
-                    'size_formatted': format_size(size),
-                    'is_dir': is_dir,
-                    'is_symlink': is_symlink
-                })
-            except (PermissionError, OSError):
-                continue
+            items.append({
+                'name': entry.name,
+                'trash_path': trash_path,
+                'original_path': metadata.get('original_path', ''),
+                'deletion_date': metadata.get('deletion_date', ''),
+                'size': size,
+                'size_formatted': format_size(size),
+                'is_dir': is_dir,
+                'is_symlink': is_symlink
+            })
+        except (PermissionError, OSError):
+            continue
 
     prune_dir_sizes(listed, names)
 
@@ -453,13 +459,23 @@ def source_candidates(locations=()) -> list[dict]:
 
 
 def resolve_source(candidate: dict) -> Path | None:
-    """The source's resolved trash directory, or None when absent or outside its root."""
+    """The source's resolved trash directory, or None when absent or outside its root.
+
+    A directory that raises any other error is still returned, so the caller
+    reports it instead of dropping the source.
+    """
+    directory = Path(os.path.realpath(candidate['path']))
     try:
-        directory = candidate['path'].resolve()
-        directory.relative_to(candidate['root'].resolve())
-        if not directory.is_dir():
-            return None
-    except (ValueError, OSError):
+        directory.relative_to(Path(os.path.realpath(candidate['root'])))
+    except ValueError:
+        return None
+    try:
+        info = directory.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError:
+        return directory
+    if not stat.S_ISDIR(info.st_mode):
         return None
     return directory
 
@@ -480,6 +496,8 @@ def existing_sources(locations=()) -> list[dict]:
         try:
             info = directory.stat()
         except OSError:
+            # The source exists but cannot be statted: keep it so its error is reported
+            sources.append({**candidate, 'directory': directory})
             continue
         identity = (info.st_dev, info.st_ino)
         if identity in seen:
@@ -504,7 +522,11 @@ def collect_sources(locations=()) -> list[dict]:
         try:
             # Count and size only: the full listing parses every trashinfo
             files = source['directory'] / 'files'
-            sizes = [get_item_size(item) for item in files.iterdir()] if files.exists() else []
+            try:
+                sizes = [get_item_size(item) for item in files.iterdir()]
+            except FileNotFoundError:
+                # No trash folder yet is an empty trash
+                sizes = []
             entry['item_count'] = len(sizes)
             entry['total_bytes'] = sum(sizes)
             entry['total_size'] = format_size(entry['total_bytes'])
@@ -749,27 +771,47 @@ def empty_source(trash_dir: Path) -> tuple[int, list[str]]:
     errors = []
 
     # Delete all files in trash
-    if files_dir.exists():
-        for entry in list(files_dir.iterdir()):
-            try:
-                remove_entry(entry)
-                deleted_count += 1
-            except FileNotFoundError:
-                # A concurrent empty removed the entry first: it is gone either way
-                pass
-            except Exception as e:
-                errors.append(f"{entry.name}: {str(e)}")
+    try:
+        entries = list(files_dir.iterdir())
+    except FileNotFoundError:
+        # No trash folder yet is an empty trash
+        entries = []
+    except (PermissionError, OSError) as error:
+        # The trash could not be listed, so no entry is known removed; keep
+        # every trashinfo for Restore (DEF-API-30)
+        return deleted_count, errors + [str(error)]
+    for entry in entries:
+        try:
+            remove_entry(entry)
+            deleted_count += 1
+        except FileNotFoundError:
+            # A concurrent empty removed the entry first: it is gone either way
+            pass
+        except Exception as e:
+            errors.append(f"{entry.name}: {str(e)}")
 
-    # Delete the trashinfo files, except of an entry that could not be removed:
-    # it stays in the trash and Restore needs its original path
-    if info_dir.exists():
-        for entry in list(info_dir.iterdir()):
-            if os.path.lexists(files_dir / entry.name.removesuffix('.trashinfo')):
-                continue
+    # Delete the trashinfo files, except those of an entry that could not be
+    # removed or examined: it stays in the trash and Restore needs its original path
+    try:
+        infos = list(info_dir.iterdir())
+    except FileNotFoundError:
+        infos = []
+    except OSError as error:
+        # The trashinfos cannot be listed; keep them and report why
+        errors.append(str(error))
+        infos = []
+    for entry in infos:
+        try:
+            os.lstat(files_dir / entry.name.removesuffix('.trashinfo'))
+        except FileNotFoundError:
+            # The entry is gone, so its trashinfo is an orphan
             try:
                 entry.unlink()
             except Exception:
                 pass
+        except OSError:
+            # The entry cannot be examined; keep its trashinfo for Restore
+            continue
 
     return deleted_count, errors
 
@@ -799,27 +841,31 @@ def empty_workspace(
     left_count = 0
     errors = []
 
-    if files_dir.exists():
-        for entry in list(files_dir.iterdir()):
-            info_file = info_dir / f"{entry.name}.trashinfo"
-            original_path = parse_trashinfo(info_file, location).get('original_path', '')
-            if not is_under(original_path, root):
-                left_count += 1
-                continue
-            try:
-                remove_entry(entry)
-            except FileNotFoundError:
-                # A concurrent delete removed the entry first: it is gone either way
-                continue
-            except Exception as e:
-                left_count += 1
-                errors.append(f"{entry.name}: {str(e)}")
-                continue
-            deleted_count += 1
-            try:
-                info_file.unlink()
-            except OSError:
-                pass
+    try:
+        entries = list(files_dir.iterdir())
+    except FileNotFoundError:
+        # No trash folder yet is an empty trash
+        entries = []
+    for entry in entries:
+        info_file = info_dir / f"{entry.name}.trashinfo"
+        original_path = parse_trashinfo(info_file, location).get('original_path', '')
+        if not is_under(original_path, root):
+            left_count += 1
+            continue
+        try:
+            remove_entry(entry)
+        except FileNotFoundError:
+            # A concurrent delete removed the entry first: it is gone either way
+            continue
+        except Exception as e:
+            left_count += 1
+            errors.append(f"{entry.name}: {str(e)}")
+            continue
+        deleted_count += 1
+        try:
+            info_file.unlink()
+        except OSError:
+            pass
 
     return deleted_count, left_count, errors
 
@@ -868,6 +914,15 @@ def empty_trash(
             'errors': []
         }
         try:
+            os.stat(source['directory'])
+        except FileNotFoundError:
+            # Enumerated but gone before the run: it was not emptied
+            entry['errors'] = ['the source is no longer available']
+            results.append(entry)
+            continue
+        except OSError:
+            pass
+        try:
             if scope == 'all':
                 entry['deleted_count'], entry['errors'] = empty_source(source['directory'])
             else:
@@ -888,7 +943,7 @@ def empty_trash(
         'deleted_count': sum(entry['deleted_count'] for entry in results),
         'sources': results
     }
-    if scope == 'workspace':
+    if scope == 'workspace' and all('left_count' in entry for entry in results):
         body['left_count'] = sum(entry['left_count'] for entry in results)
     return None, body
 

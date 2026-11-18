@@ -88,6 +88,20 @@ REST handlers under `jupyterlab-trash-mgmt-extension/`
   - root-cause: 2026-11-14T10:24:36Z @kj get_dir_size and remove_tree recurse with no st_dev check; present at HEAD for the XDG trash as well
   - log: 2026-11-14T10:24:36Z @kj added
   - log: 2026-11-14T10:54:00Z @kj closed
+- [x] `DEF-API-46-WORKSPACE-LEFT` **Workspace clean answers 500 when a source cannot be read** - MAJOR; A scope-workspace empty whose source raises PermissionError or OSError raises KeyError while the answer is built, so the request answers 500 instead of reporting the per-source errors; entries already deleted in other sources are not reported
+  - evidence: make test green: jest 194, pytest 135, auth gate; TestEmptyScopes::test_scope_workspace_reports_a_source_that_cannot_be_read asserts status None, success False, the xdg error, the cache left_count 1 and no body left_count, and fails with KeyError on the pre-fix sum; review SHIP wf_8a225cb2-827 plus the left_count guard fix wf_74c4a4b5-cf3
+  - repro: code: routes.py:892 sums entry['left_count'] for every result; the except (PermissionError, OSError) branch at :880-881 sets only errors, never left_count, so the sum raises KeyError for that run
+  - test-tags: INTEGRATION
+  - root-cause: 2026-11-18T08:20:46Z @kj the workspace branch sets left_count only inside the try; the except path leaves the key unset while the answer sums it for every entry
+  - log: 2026-11-18T08:20:46Z @kj added; reason: found by the round 3 adversarial review of ACC-SCOPE-106, pre-existing and outside that change; filed so it is not lost
+  - log: 2026-11-18T08:33:53Z @kj closed: fixed
+- [x] `DEF-API-47-UNSEARCHABLE` **An unsearchable trash root is reported empty and successful** - MEDIUM; A trash root whose directory denies search is listed as a source with no entries and a clean over it reports success; its entries are silently skipped, so the panel shows the trash as empty and a workspace clean leaves them with no error
+  - evidence: make test green: jest 194, pytest 143, auth gate; seven permission tests (0o000 root on four paths, 0o644 files, 0o000 info, folder under 0o000 root) fail pre-fix and pass now; review SHIP wf_550e1d4b-fc1; two out-of-bar MINORs deferred
+  - repro: verified as uid 1000: chmod 000 on the xdg trash root holding a workspace entry plus a readable cache; empty_trash('workspace', root) returns status None, success true, xdg errors empty and deleted 0; collect_source_listing('xdg', '') returns items []
+  - test-tags: INTEGRATION
+  - root-cause: 2026-11-18T08:31:15Z @kj files_dir.exists() swallows EACCES and returns False, and empty_workspace takes that as an empty trash; resolve_source already listed the source because is_dir() needs only search permission on the parent; same pattern at routes.py:320 and :507
+  - log: 2026-11-18T08:31:15Z @kj added; reason: found by the round 1 adversarial review of DEF-API-46 as a pre-existing sibling; filed so it is not lost
+  - log: 2026-11-18T11:16:08Z @kj closed
 
 ## Trash side panel `PANEL`
 
