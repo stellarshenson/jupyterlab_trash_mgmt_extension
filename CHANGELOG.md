@@ -2,6 +2,12 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.35] - 2026-11-18
+
+### Changed
+
+- Band labels read HOME for the home trash and WORKSPACE for the notebook root, wherever the root lives; the notebook root never reads HOME, so the two standardised trashes never share a label, and every other label keeps its tilde or path
+
 ## [1.1.34] - 2026-11-18
 
 ### Added

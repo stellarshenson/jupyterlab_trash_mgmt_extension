@@ -24,6 +24,10 @@ def get_trash_dir() -> Path:
 # The root the cache and the home trashes are found under. Tests point it at a temporary tree.
 HOMES_ROOT = Path('/home')
 
+# The standardised labels: the xdg trash under HOME, and the notebook root.
+LABEL_HOME = 'HOME'
+LABEL_WORKSPACE = 'WORKSPACE'
+
 
 def resolve_locations(locations, root_dir: str) -> list[str]:
     """The monitored locations as absolute paths: '~' expanded, a relative path joined to the server root."""
@@ -381,7 +385,8 @@ def source_label(path, homes) -> str:
     homes is HOME as spelled, then HOME with its symbolic links resolved. The
     path is compared as spelled and never resolved, so a symbolic link inside
     HOME keeps its '~' label. The order matters only when one HOME spelling
-    lies inside the other.
+    lies inside the other. The standardised HOME and WORKSPACE labels bypass
+    this function.
     """
     for home in homes:
         try:
@@ -395,6 +400,10 @@ def source_label(path, homes) -> str:
 def source_candidates(locations=()) -> list[dict]:
     """Every possible trash source in display order, present or not.
 
+    The first monitored location is the notebook root, so its label reads
+    WORKSPACE wherever the root lives; later locations use source_label. The
+    root never reads HOME: the home trash already does, and the two
+    standardised trashes never share a label.
     A home is only a candidate when its own directory is a real directory:
     a symlink under the homes root is not followed out of that root.
     Each monitored location adds its .Trash-<uid>, and its .Trash/<uid> when
@@ -406,8 +415,8 @@ def source_candidates(locations=()) -> list[dict]:
     candidates = [
         {
             'id': 'xdg',
-            # A trash under HOME belongs to the home, as a location trash belongs to its location
-            'label': '~' if xdg_label.startswith('~') else xdg_label,
+            # A trash under HOME belongs to the home folder, so it reads HOME
+            'label': LABEL_HOME if xdg_label.startswith('~') else xdg_label,
             'path': get_trash_dir(),
             'root': get_trash_dir().parent
         },
@@ -438,8 +447,9 @@ def source_candidates(locations=()) -> list[dict]:
         })
 
     uid = os.getuid()
-    for location in locations:
+    for index, location in enumerate(locations):
         top = Path(location)
+        label = LABEL_WORKSPACE if index == 0 else source_label(top, user_homes)
         trashes = [top / f'.Trash-{uid}']
         try:
             mode = (top / '.Trash').lstat().st_mode
@@ -450,7 +460,7 @@ def source_candidates(locations=()) -> list[dict]:
         for trash in trashes:
             candidates.append({
                 'id': f'location:{trash}',
-                'label': source_label(top, user_homes),
+                'label': label,
                 'path': trash,
                 'root': top,
                 'location': str(top)

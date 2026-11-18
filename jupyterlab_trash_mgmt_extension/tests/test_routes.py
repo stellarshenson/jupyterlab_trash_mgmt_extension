@@ -575,15 +575,41 @@ class TestTrashSources:
         assert sources[0]["error"] == ""
         assert sources[1]["item_count"] == 1
 
-    def test_xdg_trash_under_home_is_labelled_with_the_home(self, tmp_path):
-        """DEF-PANEL-42-HOME-LABEL: the default XDG trash reads '~', not its trash folder."""
+    def test_xdg_trash_under_home_is_labelled_home(self, tmp_path):
+        """ACC-BANDS-109-HOME-LABEL: the default XDG trash reads HOME (was DEF-PANEL-42-HOME-LABEL)."""
         trash = make_trash(tmp_path / "home" / ".local" / "share" / "Trash")
 
         sources = routes.existing_sources()
 
-        assert [(source["id"], source["label"]) for source in sources] == [("xdg", "~")]
+        assert [(source["id"], source["label"]) for source in sources] == [("xdg", "HOME")]
         # Only the label changes: the paths the server compares stay absolute
         assert sources[0]["path"] == trash and sources[0]["root"].is_absolute()
+
+    def test_notebook_root_is_labelled_workspace(self, tmp_path):
+        """ACC-BANDS-109-HOME-LABEL: the first location reads WORKSPACE wherever it lives."""
+        home = tmp_path / "home"
+        make_trash(home / ".local" / "share" / "Trash")
+        root = home / "workspace"
+        second = tmp_path / "nas"
+        root_trash = make_trash(root / f".Trash-{os.getuid()}")
+        second_trash = make_trash(second / f".Trash-{os.getuid()}")
+
+        sources = routes.existing_sources([str(root), str(second)])
+
+        assert [(source["id"], source["label"]) for source in sources] == [
+            ("xdg", "HOME"),
+            (f"location:{root_trash}", "WORKSPACE"),
+            (f"location:{second_trash}", str(second)),
+        ]
+
+        # A notebook root that is the home folder also reads WORKSPACE
+        home_trash = make_trash(home / f".Trash-{os.getuid()}")
+        sources = routes.existing_sources([str(home)])
+
+        assert [(source["id"], source["label"]) for source in sources] == [
+            ("xdg", "HOME"),
+            (f"location:{home_trash}", "WORKSPACE"),
+        ]
 
     def test_sources_carry_their_size_in_bytes(self, trash_dir, tmp_path, monkeypatch):
         """ACC-SCOPE-104-VOLUME-BANDS: each source carries total_bytes, 0 when empty."""
