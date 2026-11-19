@@ -1063,9 +1063,7 @@ export class TrashWidget extends Widget {
         void this._loadSectionList(source);
       }
     }
-    if (!this._showVolumes && this._path.length === 0) {
-      this._renderMain();
-    }
+    this._renderMain();
   }
 
   /**
@@ -1857,7 +1855,7 @@ export class TrashWidget extends Widget {
     row.className = 'jp-TrashPanel-sectionRow';
     row.dataset.path = item.trash_path;
     row.setAttribute('role', 'option');
-    row.title = this._itemTitle(item);
+    row.title = this._itemTitle(item, source);
     row.addEventListener('contextmenu', (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -2199,14 +2197,24 @@ export class TrashWidget extends Widget {
     }
   }
 
-  /** The hover title of a restorable row: where it restores to and what it is. */
-  private _itemTitle(item: ITrashItem): string {
-    return [
+  /**
+   * The hover title of a restorable row: where it restores to, what it is,
+   * and the trash that holds it.
+   */
+  private _itemTitle(item: ITrashItem, source?: string): string {
+    const id = source ?? item.source ?? 'xdg';
+    const entry = this._sources.find(known => known.id === id);
+    const lines = [
       `Original: ${item.original_path}`,
       `Type: ${item.is_symlink ? 'Symbolic link' : item.is_dir ? 'Folder' : 'File'}`,
       `Size: ${item.size_formatted}`,
       `Deleted: ${this._formatDate(item.deletion_date)}`
-    ].join('\n');
+    ];
+    // The sources answer may not have arrived yet; no line beats 'undefined'
+    if (entry !== undefined) {
+      lines.push(`Trash: ${entry.label} on ${entry.mountpoint}`);
+    }
+    return lines.join('\n');
   }
 
   private _createItemElement(item: ITrashItem): HTMLDivElement {
@@ -2453,7 +2461,7 @@ export class TrashWidget extends Widget {
     }
     try {
       const date = new Date(isoDate);
-      return date.toLocaleString();
+      return date.toLocaleString(navigator.language);
     } catch {
       return isoDate;
     }

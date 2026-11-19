@@ -2,6 +2,13 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.37] - 2026-11-19
+
+### Fixed
+
+- The row tooltip names the trash that holds the item and the mountpoint of its volume, as `HOME on /home`, in the merged main list, the section bands and folder views; a row drawn before the sources answer gains the line when they answer
+- The tooltip date and time read in the browser's locale, in the Deleted line and the Deleted column title, instead of a fixed US format
+
 ## [1.1.36] - 2026-11-18
 
 ### Added

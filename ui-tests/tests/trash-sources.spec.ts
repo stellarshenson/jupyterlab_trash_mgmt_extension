@@ -336,6 +336,38 @@ test('the band tooltip names the mountpoint of the volume holding its trash', as
   expect(title?.endsWith(` on ${mountpoint}`)).toBe(true);
 });
 
+// DEF-PANEL-49-ROW-TIP: the row tooltip names the volume of the trash that
+// holds the row, as its last line, like the band label's tooltip.
+test('the row tooltip names the mountpoint of the volume holding its trash', async ({
+  page
+}) => {
+  const mountpoint = '/mnt/data';
+  await stubMainList(page, []);
+  await stubSources(
+    page,
+    [
+      SOURCES[0],
+      {
+        ...SOURCES[1],
+        item_count: 1,
+        total_size: '1 KB',
+        total_bytes: 1024,
+        mountpoint
+      }
+    ],
+    { cache: [stubItem('cache-a.bin', '1 KB')] }
+  );
+  await page.goto();
+  await openPanel(page);
+
+  const row = page.locator(
+    `${PANEL} .jp-TrashPanel-list .jp-TrashPanel-item[data-source="cache"]`
+  );
+  await expect(row).toHaveCount(1);
+  const title = await row.getAttribute('title');
+  expect(title?.endsWith(` on ${mountpoint}`)).toBe(true);
+});
+
 test('a header click opens a folded section and folds the open one, and the state survives a reload', async ({
   page
 }) => {

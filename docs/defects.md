@@ -346,6 +346,22 @@ Lumino widget in `src/widget.ts`
   - root-cause: 2026-11-18T17:46:37Z @kj The entries box is overflow-y auto with an inline height that animates below scrollHeight, so the browser draws a scrollbar for the pinned box.
   - log: 2026-11-18T17:46:37Z @kj added
   - log: 2026-11-18T18:53:53Z @kj closed
+- [x] `DEF-PANEL-49-ROW-TIP` **the row tooltip names no volume holding the item's trash** - MINOR; Hovering a row in the main list shows Original, Type, Size and Deleted only; nothing says which volume's trash the item sits in, so one trash's row cannot be told apart from another's by its tooltip.
+  - test-tags: UNIT, FUNCTIONAL
+  - evidence: The Galata case 'the row tooltip names the mountpoint of the volume holding its trash' passed at retry 0 in the full 41-case serial suite at 1.1.36; the installed bundle carries the Trash line, jest 230/230 passed.
+  - repro: Hover a row in the side panel's main list and read the tooltip: it carries no volume or trash source.
+  - root-cause: 2026-11-19T14:01:22Z @kj src/widget.ts _itemTitle builds the four lines and never reads the row's source; ITrashSource.mountpoint is already known to the panel but is never appended.
+  - log: 2026-11-19T14:01:22Z @kj added
+  - log: 2026-11-19T14:41:23Z @kj closed
+  - log: 2026-11-19T14:41:59Z @kj edited test-tags added "UNIT, FUNCTIONAL"
+- [x] `DEF-PANEL-50-TIP-LOCALE` **the tooltip date shows US format whatever the browser locale** - MINOR; The Deleted line of the row tooltip and of the Deleted column read 11/19/2026, 2:58:35 PM; a browser whose current locale formats dates otherwise should read that format.
+  - test-tags: UNIT
+  - evidence: The jest case 'formats the Deleted line in the browser locale' passes with navigator.language stubbed to pl-PL and fails against the old formatter (machine default en-GB); jest 230/230 in the slow suite, installed bundle carries toLocaleString(navigator.language).
+  - repro: Hover a row in the side panel's main list: Deleted reads 11/19/2026, 2:58:35 PM instead of the browser locale's date and time format.
+  - root-cause: 2026-11-19T14:01:22Z @kj src/widget.ts _formatDate calls toLocaleString() with no locale; the runtime default follows the browser UI language rather than the locale the page reports as current.
+  - log: 2026-11-19T14:01:22Z @kj added
+  - log: 2026-11-19T14:41:23Z @kj closed
+  - log: 2026-11-19T14:41:59Z @kj edited test-tags added "UNIT"
 
 ## Test suite `TEST`
 

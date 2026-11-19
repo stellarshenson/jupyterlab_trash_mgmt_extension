@@ -4899,3 +4899,131 @@ describe('harmonica controller', () => {
     ]);
   });
 });
+
+// DEF-PANEL-49-ROW-TIP: the row tooltip names the trash that holds the row and
+// that trash's volume. DEF-PANEL-50-TIP-LOCALE: its date follows the browser.
+describe('row tooltip', () => {
+  const lastLine = (row: HTMLElement): string => {
+    const lines = row.title.split('\n');
+    return lines[lines.length - 1];
+  };
+
+  // DEF-PANEL-49-ROW-TIP
+  it('names the trash and its volume on a merged row of another source', async () => {
+    const widget = await open({
+      sources: [
+        sourceOf('xdg', 1, '5 B'),
+        { ...sourceOf('cache', 1, '1 KB'), mountpoint: '/mnt/data' }
+      ],
+      list: listOf([file('one.txt')], '5 B'),
+      'list?source=cache': listOf([file('cache.bin')], '1 KB')
+    });
+
+    const row = rows(widget)[rowNames(widget).indexOf('cache.bin')];
+    expect(row.dataset.source).toBe('cache');
+    expect(lastLine(row)).toBe('Trash: /home/cache on /mnt/data');
+  });
+
+  // DEF-PANEL-49-ROW-TIP
+  it('names the XDG trash on a merged XDG row', async () => {
+    const widget = await open({
+      sources: [
+        { ...sourceOf('xdg', 1, '5 B'), label: 'HOME' },
+        sourceOf('cache', 1, '1 KB')
+      ],
+      list: listOf([file('one.txt')], '5 B'),
+      'list?source=cache': listOf([file('cache.bin')], '1 KB')
+    });
+
+    const row = rows(widget)[rowNames(widget).indexOf('one.txt')];
+    expect(row.dataset.source).toBeUndefined();
+    expect(lastLine(row)).toBe('Trash: HOME on /');
+  });
+
+  // DEF-PANEL-49-ROW-TIP
+  it('names the section trash on a band row before any right-click', async () => {
+    showVolumesOn();
+    const widget = await open(sourcedRoutes());
+    openBand(widget, 'cache');
+
+    const row = sectionRows(widget, 'cache')[0];
+    expect(lastLine(row)).toBe('Trash: /home/cache on /');
+  });
+
+  // DEF-PANEL-49-ROW-TIP
+  it('adds the line to rows drawn before the sources answer', async () => {
+    showVolumesOn();
+    const held = deferred<unknown>();
+    const widget = await open({
+      sources: () => held.promise,
+      list: listOf([file('one.txt')])
+    });
+
+    const before = rows(widget)[0];
+    expect(before.title.split('\n')).toHaveLength(4);
+    expect(before.title).not.toContain('Trash: ');
+
+    held.resolve([
+      { ...sourceOf('xdg', 1, '5 B'), label: 'HOME' },
+      sourceOf('cache', 1, '1 KB')
+    ]);
+    await settle();
+
+    const after = rows(widget)[0];
+    expect(after.title.split('\n')).toHaveLength(5);
+    expect(lastLine(after)).toBe('Trash: HOME on /');
+  });
+
+  // DEF-PANEL-49-ROW-TIP
+  it('adds the line to rows of a folder opened before the sources answer', async () => {
+    const held = deferred<unknown>();
+    const widget = await open({
+      sources: () => held.promise,
+      list: listOf([folder('a')]),
+      'list?path=a': listOf([file('one.txt', 'a')])
+    });
+
+    expect(rowNames(widget)[0]).toBe('a');
+    doubleClick(rows(widget)[0]);
+    await settle();
+
+    const before = rows(widget)[0];
+    expect(before.title.split('\n')).toHaveLength(4);
+    expect(before.title).not.toContain('Trash: ');
+
+    held.resolve([{ ...sourceOf('xdg', 1, '5 B'), label: 'HOME' }]);
+    await settle();
+
+    const after = rows(widget)[0];
+    expect(after.title.split('\n')).toHaveLength(5);
+    expect(lastLine(after)).toBe('Trash: HOME on /');
+  });
+
+  // DEF-PANEL-50-TIP-LOCALE
+  it('formats the Deleted line in the browser locale', async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'language');
+    Object.defineProperty(navigator, 'language', {
+      configurable: true,
+      value: 'pl-PL'
+    });
+    try {
+      const deleted = '2024-01-14T09:00:00';
+      const widget = await open({
+        list: listOf([{ ...file('one.txt'), deletion_date: deleted }])
+      });
+
+      const line = rows(widget)[0]
+        .title.split('\n')
+        .find(text => text.startsWith('Deleted: '))!;
+      expect(line).toBe(
+        `Deleted: ${new Date(deleted).toLocaleString('pl-PL')}`
+      );
+    } finally {
+      if (original === undefined) {
+        delete (navigator as any).language;
+      } else {
+        Object.defineProperty(navigator, 'language', original);
+      }
+    }
+  });
+});
