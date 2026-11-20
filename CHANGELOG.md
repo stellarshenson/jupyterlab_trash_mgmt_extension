@@ -2,6 +2,13 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## [1.1.38] - 2026-11-20
+
+### Changed
+
+- The band tooltip and every row tooltip name the exact trash folder, as `Trash: /home/lab/.local/share/Trash`, in the merged main list, the section bands and folder views; the sources answer carries `location` and the mountpoint resolution is removed
+- The harmonica give length is 48px instead of 44px; the pull, the 160 ms spring, the 400 ms fold and the 88px base threshold are unchanged, so two 100px notches still fold
+
 ## [1.1.37] - 2026-11-19
 
 ### Fixed

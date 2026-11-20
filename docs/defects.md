@@ -354,6 +354,7 @@ Lumino widget in `src/widget.ts`
   - log: 2026-11-19T14:01:22Z @kj added
   - log: 2026-11-19T14:41:23Z @kj closed
   - log: 2026-11-19T14:41:59Z @kj edited test-tags added "UNIT, FUNCTIONAL"
+  - log: 2026-11-19T16:20:17Z @kj the row line now names the exact trash folder instead of the volume mountpoint, per the owner's order of 2026-11-19; the five jest cases were updated
 - [x] `DEF-PANEL-50-TIP-LOCALE` **the tooltip date shows US format whatever the browser locale** - MINOR; The Deleted line of the row tooltip and of the Deleted column read 11/19/2026, 2:58:35 PM; a browser whose current locale formats dates otherwise should read that format.
   - test-tags: UNIT
   - evidence: The jest case 'formats the Deleted line in the browser locale' passes with navigator.language stubbed to pl-PL and fails against the old formatter (machine default en-GB); jest 230/230 in the slow suite, installed bundle carries toLocaleString(navigator.language).
@@ -362,6 +363,14 @@ Lumino widget in `src/widget.ts`
   - log: 2026-11-19T14:01:22Z @kj added
   - log: 2026-11-19T14:41:23Z @kj closed
   - log: 2026-11-19T14:41:59Z @kj edited test-tags added "UNIT"
+- [x] `DEF-PANEL-51-BIND-MOUNT` **the band tooltip names /home for a trash on a bind mount** - MINOR; In a lab whose workspace is a Docker bind mount at /home/lab/workspace, the WORKSPACE band and its rows read 'WORKSPACE on /home'; the tooltip should name the actual mount point, /home/lab/workspace.
+  - evidence: The installed 1.1.37 server module prints /home/lab/workspace for the workspace trash and /home for the XDG trash; pytest 148 passed with test_a_bind_mount_names_the_volume_holding_the_trash; full Galata 41/41 at retry 0 in the slow suite.
+  - repro: Hover the WORKSPACE band or a WORKSPACE row in a lab whose workspace is a bind mount: the tooltip reads WORKSPACE on /home instead of the bind mount path.
+  - test-tags: UNIT
+  - root-cause: 2026-11-19T15:04:45Z @kj os.path.ismount returns False for a bind mount because it shares the parent device, so volume_mountpoint walks past /home/lab/workspace to /home; /proc/self/mountinfo lists the bind mount.
+  - log: 2026-11-19T15:04:45Z @kj added
+  - log: 2026-11-19T15:32:02Z @kj closed
+  - log: 2026-11-19T16:20:17Z @kj the mountpoint is no longer displayed: the tooltip names the exact trash folder, so the resolution this defect covered was deleted with the owner's order of 2026-11-19
 
 ## Test suite `TEST`
 

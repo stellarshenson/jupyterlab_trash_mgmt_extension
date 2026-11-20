@@ -67,7 +67,7 @@ interface IStubSource {
   total_size: string;
   total_bytes: number;
   error: string;
-  mountpoint: string;
+  location: string;
 }
 
 interface IStubItem {
@@ -96,7 +96,7 @@ const SOURCES: IStubSource[] = [
     total_size: '0 B',
     total_bytes: 0,
     error: '',
-    mountpoint: '/'
+    location: '/home/lab/.local/share/Trash'
   },
   {
     id: 'cache',
@@ -105,7 +105,7 @@ const SOURCES: IStubSource[] = [
     total_size: '1.2 MB',
     total_bytes: 1258291,
     error: '',
-    mountpoint: '/'
+    location: '/home/cache'
   },
   {
     id: 'home:alice',
@@ -114,7 +114,7 @@ const SOURCES: IStubSource[] = [
     total_size: '7 KB',
     total_bytes: 7168,
     error: '',
-    mountpoint: '/home'
+    location: '/home/alice/.local/share/Trash'
   }
 ];
 
@@ -314,17 +314,15 @@ test('renders one section per source, in server order, with its own count and si
   expect(occurrences).toEqual([1, 1]);
 });
 
-// ACC-BANDS-111-TRASH-TIP: the band tooltip names the mountpoint of the
-// volume that holds the band's trash folder, after the label.
-test('the band tooltip names the mountpoint of the volume holding its trash', async ({
-  page
-}) => {
-  const mountpoint = '/mnt/lab-home';
+// ACC-BANDS-111-TRASH-TIP: the band tooltip names the exact trash folder
+// that holds the band's entries, after the label.
+test('the band tooltip names the exact trash folder', async ({ page }) => {
+  const location = '/mnt/lab-home/.Trash-1000';
   await showVolumesOn(page);
   await stubMainList(page, []);
   await stubSources(
     page,
-    [{ ...SOURCES[0], mountpoint }, SOURCES[1], SOURCES[2]],
+    [{ ...SOURCES[0], location }, SOURCES[1], SOURCES[2]],
     { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
   );
   await page.goto();
@@ -333,15 +331,13 @@ test('the band tooltip names the mountpoint of the volume holding its trash', as
   const title = await sectionLabel(page, 'xdg')
     .locator('.jp-TrashPanel-sectionText')
     .getAttribute('title');
-  expect(title?.endsWith(` on ${mountpoint}`)).toBe(true);
+  expect(title).toBe(location);
 });
 
-// DEF-PANEL-49-ROW-TIP: the row tooltip names the volume of the trash that
+// DEF-PANEL-49-ROW-TIP: the row tooltip names the exact trash folder that
 // holds the row, as its last line, like the band label's tooltip.
-test('the row tooltip names the mountpoint of the volume holding its trash', async ({
-  page
-}) => {
-  const mountpoint = '/mnt/data';
+test('the row tooltip names the exact trash folder', async ({ page }) => {
+  const location = '/mnt/data/.Trash-1000';
   await stubMainList(page, []);
   await stubSources(
     page,
@@ -352,7 +348,7 @@ test('the row tooltip names the mountpoint of the volume holding its trash', asy
         item_count: 1,
         total_size: '1 KB',
         total_bytes: 1024,
-        mountpoint
+        location
       }
     ],
     { cache: [stubItem('cache-a.bin', '1 KB')] }
@@ -365,7 +361,7 @@ test('the row tooltip names the mountpoint of the volume holding its trash', asy
   );
   await expect(row).toHaveCount(1);
   const title = await row.getAttribute('title');
-  expect(title?.endsWith(` on ${mountpoint}`)).toBe(true);
+  expect(title?.endsWith(`Trash: ${location}`)).toBe(true);
 });
 
 test('a header click opens a folded section and folds the open one, and the state survives a reload', async ({
@@ -589,7 +585,7 @@ const LONG_SOURCES: IStubSource[] = [
     total_size: '0 B',
     total_bytes: 0,
     error: '',
-    mountpoint: '/'
+    location: '/home/lab/.local/share/Trash'
   },
   {
     id: 'cache',
@@ -598,7 +594,7 @@ const LONG_SOURCES: IStubSource[] = [
     total_size: '60 MB',
     total_bytes: 62914560,
     error: '',
-    mountpoint: '/'
+    location: '/home/cache'
   },
   {
     id: 'home:alice',
@@ -607,7 +603,7 @@ const LONG_SOURCES: IStubSource[] = [
     total_size: '60 KB',
     total_bytes: 61440,
     error: '',
-    mountpoint: '/home'
+    location: '/home/alice/.local/share/Trash'
   }
 ];
 
@@ -956,7 +952,7 @@ test('a dozen bands in a short panel scroll the column instead of clipping', asy
       total_size: '0 B',
       total_bytes: 0,
       error: '',
-      mountpoint: '/home'
+      location: `/home/s${index}/.local/share/Trash`
     }))
   ];
   await showVolumesOn(page);
@@ -1058,7 +1054,7 @@ const LOCATION_SOURCES: IStubSource[] = [
     total_size: '3 KB',
     total_bytes: 3072,
     error: '',
-    mountpoint: '/mnt/data'
+    location: LOCATION_ID.slice('location:'.length)
   }
 ];
 const LOCATION_ITEM: IStubItem = {
@@ -1590,7 +1586,7 @@ test('a band is 21px with an enabled and a disabled trash button, and the button
         total_size: '0 B',
         total_bytes: 0,
         error: '',
-        mountpoint: '/home'
+        location: '/home/bob/.local/share/Trash'
       }
     ],
     { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS }
@@ -1645,7 +1641,7 @@ test('the band and home band trash buttons draw an 18px box inside their band, a
   );
   await expect(
     sectionLabel(page, 'xdg').locator('.jp-TrashPanel-sectionText')
-  ).toHaveAttribute('title', `${xdgLabel} on /`);
+  ).toHaveAttribute('title', SOURCES[0].location);
 
   type Box = { x: number; y: number; width: number; height: number };
   const expectInside = (box: Box, outer: Box): void => {
@@ -1681,8 +1677,8 @@ test('the band and home band trash buttons draw an 18px box inside their band, a
   expectInside((await homeButton.boundingBox())!, (await home.boundingBox())!);
 });
 
-// ACC-SCOPE-95-BAND-LINE: at 280px a long label takes the ellipsis and keeps
-// its full text in the title; the band stays one 21px line and the count shows.
+// ACC-SCOPE-95-BAND-LINE: at 280px a long label takes the ellipsis and its full
+// folder path stays in the title; the band stays one 21px line and the count shows.
 test('a band with a long label stays one 21px line at 280px and keeps its count', async ({
   page
 }) => {
@@ -1700,7 +1696,7 @@ test('a band with a long label stays one 21px line at 280px and keeps its count'
         total_size: '3 KB',
         total_bytes: 3072,
         error: '',
-        mountpoint: '/mnt/a-very-long-network-volume-name'
+        location: `${label}/.Trash-1000`
       }
     ],
     { cache: CACHE_ITEMS, 'home:alice': ALICE_ITEMS, [id]: [LOCATION_ITEM] }
@@ -1716,10 +1712,7 @@ test('a band with a long label stays one 21px line at 280px and keeps its count'
   });
   const text = sectionLabel(page, id).locator('.jp-TrashPanel-sectionText');
   const count = sectionLabel(page, id).locator('.jp-TrashPanel-sectionCount');
-  await expect(text).toHaveAttribute(
-    'title',
-    `${label} on /mnt/a-very-long-network-volume-name`
-  );
+  await expect(text).toHaveAttribute('title', `${label}/.Trash-1000`);
   await expect(count).toBeVisible();
 
   const band = (await section(page, id)

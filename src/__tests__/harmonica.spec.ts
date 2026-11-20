@@ -12,9 +12,9 @@ import {
 } from '../harmonica';
 
 describe('give length', () => {
-  it('is 44px at a base of 88px or more', () => {
-    expect(giveLength(88)).toBe(44);
-    expect(giveLength(400)).toBe(44);
+  it('is 48px at a base of 88px or more', () => {
+    expect(giveLength(88)).toBe(48);
+    expect(giveLength(400)).toBe(48);
   });
 
   it('is half the base below 88px, rounded down, and never under one pull step', () => {
@@ -30,12 +30,12 @@ describe('pull step', () => {
     expect(pullIncrement(100)).toBe(25);
     expect(pullIncrement(-100)).toBe(25);
     expect(pullIncrement(4)).toBe(3);
-    expect(pullStep(0, 100, 44)).toBe(25);
-    expect(pullStep(10, 1, 44)).toBe(13);
+    expect(pullStep(0, 100, 48)).toBe(25);
+    expect(pullStep(10, 1, 48)).toBe(13);
   });
 
   it('clamps at the give length', () => {
-    expect(pullStep(40, 100, 44)).toBe(44);
+    expect(pullStep(40, 100, 48)).toBe(48);
     expect(pullStep(0, 400, 30)).toBe(30);
   });
 });
@@ -76,8 +76,8 @@ describe('fold easing', () => {
 
 describe('spring', () => {
   it('decays the pull and settles under 300ms', () => {
-    expect(springPull(44, 0)).toBe(44);
-    expect(Math.abs(springPull(44, 100))).toBeLessThan(44);
-    expect(Math.abs(springPull(44, 300))).toBeLessThan(1);
+    expect(springPull(48, 0)).toBe(48);
+    expect(Math.abs(springPull(48, 100))).toBeLessThan(48);
+    expect(Math.abs(springPull(48, 300))).toBeLessThan(1);
   });
 });

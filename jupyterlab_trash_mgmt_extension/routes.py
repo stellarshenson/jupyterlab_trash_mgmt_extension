@@ -517,18 +517,6 @@ def existing_sources(locations=()) -> list[dict]:
     return sources
 
 
-def volume_mountpoint(path) -> str:
-    """The mountpoint of the volume holding path, as a string.
-
-    The real path is walked upward to the first ancestor that is a mount
-    point; the file system root answers when no deeper one does.
-    """
-    candidate = Path(os.path.realpath(path))
-    while not os.path.ismount(candidate):
-        candidate = candidate.parent
-    return str(candidate)
-
-
 def collect_sources(locations=()) -> list[dict]:
     """The /sources response: each existing source with its count and size."""
     sources = []
@@ -540,7 +528,7 @@ def collect_sources(locations=()) -> list[dict]:
             'total_size': format_size(0),
             'total_bytes': 0,
             'error': '',
-            'mountpoint': volume_mountpoint(source['directory'])
+            'location': str(source['directory'])
         }
         try:
             # Count and size only: the full listing parses every trashinfo
@@ -565,7 +553,7 @@ def collect_sources(locations=()) -> list[dict]:
             'total_size': format_size(0),
             'total_bytes': 0,
             'error': '',
-            'mountpoint': volume_mountpoint(source_candidates(locations)[0]['path'])
+            'location': str(source_candidates(locations)[0]['path'])
         })
     return sources
 

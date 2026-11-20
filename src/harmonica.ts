@@ -14,11 +14,11 @@ export function pullStep(pull: number, deltaY: number, give: number): number {
 }
 
 /**
- * The pull that folds the section: 44px at a base of 88px or more, else half
+ * The pull that folds the section: 48px at a base of 88px or more, else half
  * the base rounded down, and never under one pull step.
  */
 export function giveLength(base: number): number {
-  return base >= 88 ? 44 : Math.max(3, Math.floor(base / 2));
+  return base >= 88 ? 48 : Math.max(3, Math.floor(base / 2));
 }
 
 /**

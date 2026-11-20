@@ -266,7 +266,7 @@ interface ISource {
   total_size: string;
   total_bytes: number;
   error: string;
-  mountpoint: string;
+  location: string;
 }
 
 /** Build a `sources` response entry the way the server shapes it. */
@@ -284,6 +284,14 @@ function sourceOf(
         : id.startsWith('location:')
           ? id.slice('location:'.length).replace(/\/\.Trash-\d+$/, '')
           : `/home/${id.slice('home:'.length)}`;
+  const location =
+    id === 'xdg'
+      ? '/home/lab/.local/share/Trash'
+      : id === 'cache'
+        ? '/home/cache'
+        : id.startsWith('location:')
+          ? id.slice('location:'.length)
+          : `/home/${id.slice('home:'.length)}/.local/share/Trash`;
   return {
     id,
     label,
@@ -291,7 +299,7 @@ function sourceOf(
     total_size: totalSize,
     total_bytes: 0,
     error,
-    mountpoint: '/'
+    location
   };
 }
 
@@ -2091,7 +2099,7 @@ describe('trash sources', () => {
     expect(shrink).toBe('0');
   });
 
-  it('keeps the band one line, the label text titled with its full label', async () => {
+  it('keeps the band one line, the label text titled with its trash folder', async () => {
     const style = document.createElement('style');
     style.textContent = jest
       .requireActual('fs')
@@ -2107,25 +2115,30 @@ describe('trash sources', () => {
     const ellipsis = [textStyle.textOverflow, textStyle.whiteSpace];
     style.remove();
 
-    expect(text.title).toBe('/home/cache on /');
+    expect(text.title).toBe('/home/cache');
     expect(wrap).not.toBe('wrap');
     expect(ellipsis).toEqual(['ellipsis', 'nowrap']);
   });
 
-  // ACC-BANDS-111-TRASH-TIP: the tooltip names the volume, not the label, so
-  // two trashes whose labels look alike still name different volumes.
-  it('titles the band with the mountpoint of the volume holding its trash', async () => {
+  // ACC-BANDS-111-TRASH-TIP: the tooltip names the exact trash folder, not
+  // the label, so two trashes whose labels look alike still read differently.
+  it('titles the band with the exact trash folder', async () => {
     const routes = sourcedRoutes();
     routes.sources = [
-      sourceOf('xdg', 1, '5 B'),
-      { ...sourceOf('cache', 12, '40 MB'), mountpoint: '/mnt/data' }
+      {
+        ...sourceOf('xdg', 1, '5 B'),
+        location: '/home/lab/.local/share/Trash'
+      },
+      { ...sourceOf('cache', 12, '40 MB'), location: '/mnt/data/.Trash-1000' }
     ];
     const widget = await open(routes);
-    const text = sectionLabel(widget, 'cache').querySelector<HTMLElement>(
-      ':scope > .jp-TrashPanel-sectionText'
-    )!;
+    const titleOf = (id: string) =>
+      sectionLabel(widget, id).querySelector<HTMLElement>(
+        ':scope > .jp-TrashPanel-sectionText'
+      )!.title;
 
-    expect(text.title).toBe('/home/cache on /mnt/data');
+    expect(titleOf('cache')).toBe('/mnt/data/.Trash-1000');
+    expect(titleOf('xdg')).toBe('/home/lab/.local/share/Trash');
   });
 
   it('the open section takes its content height and the next band follows it', async () => {
@@ -4007,7 +4020,7 @@ describe('trash buttons', () => {
     return routes;
   }
 
-  it('with Show Volumes on, the home band carries the XDG label, which its tooltip holds and the ellipsis shortens, and the summary text carries none', async () => {
+  it('with Show Volumes on, the home band carries the XDG label, its tooltip names the exact trash folder, and the summary text carries none', async () => {
     showVolumesOn();
     const widget = await open(labelledRoutes());
     expect(summaryText(widget).textContent).toBe('16 items \u00B7 0 B');
@@ -4018,7 +4031,7 @@ describe('trash buttons', () => {
       ':scope > .jp-TrashPanel-sectionText'
     )!;
     expect(label.textContent).toBe(XDG_LABEL);
-    expect(label.title).toBe(`${XDG_LABEL} on /`);
+    expect(label.title).toBe('/home/lab/.local/share/Trash');
     expect(
       band.querySelector(':scope > .jp-TrashPanel-sectionCount')!.textContent
     ).toBe(' (1 item, 5 B)');
@@ -4559,7 +4572,7 @@ describe('harmonica controller', () => {
           : 150
     });
 
-    // One notch reaches the 44px give, so the fold measures the entering
+    // One notch reaches the 48px give, so the fold measures the entering
     // content only after _paintPull reveals its box
     const give = wheel(widget, 200);
     expect(give.defaultPrevented).toBe(true);
@@ -4572,7 +4585,7 @@ describe('harmonica controller', () => {
     );
     expect(leaving).toBeGreaterThan(0);
     expect(leaving).toBeLessThan(156);
-    expect(entering).toBeGreaterThan(44);
+    expect(entering).toBeGreaterThan(48);
     expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
       'false'
     );
@@ -4613,7 +4626,7 @@ describe('harmonica controller', () => {
 
     // Still at the end, so the next notch reaches the give and folds
     wheel(widget, 100);
-    expect(sectionEntries(widget, 'cache').style.height).toBe('44px');
+    expect(sectionEntries(widget, 'cache').style.height).toBe('48px');
     await jest.advanceTimersByTimeAsync(600);
     expect(sectionHeader(widget, 'cache').getAttribute('aria-expanded')).toBe(
       'true'
@@ -4799,7 +4812,7 @@ describe('harmonica controller', () => {
     measureLayout(widget, 'cache', { base: 200, content: 0 });
     scrollAt(sectionEntries(widget, 'cache'), 0, 0);
 
-    // Two upward notches reach the 44px give and fold into the home section
+    // Two upward notches reach the 48px give and fold into the home section
     wheel(widget, -100);
     wheel(widget, -100);
     await jest.advanceTimersByTimeAsync(100);
@@ -4901,7 +4914,7 @@ describe('harmonica controller', () => {
 });
 
 // DEF-PANEL-49-ROW-TIP: the row tooltip names the trash that holds the row and
-// that trash's volume. DEF-PANEL-50-TIP-LOCALE: its date follows the browser.
+// that trash's exact folder. DEF-PANEL-50-TIP-LOCALE: its date follows the browser.
 describe('row tooltip', () => {
   const lastLine = (row: HTMLElement): string => {
     const lines = row.title.split('\n');
@@ -4909,11 +4922,11 @@ describe('row tooltip', () => {
   };
 
   // DEF-PANEL-49-ROW-TIP
-  it('names the trash and its volume on a merged row of another source', async () => {
+  it('names the exact trash folder on a merged row of another source', async () => {
     const widget = await open({
       sources: [
         sourceOf('xdg', 1, '5 B'),
-        { ...sourceOf('cache', 1, '1 KB'), mountpoint: '/mnt/data' }
+        { ...sourceOf('cache', 1, '1 KB'), location: '/mnt/data/.Trash-1000' }
       ],
       list: listOf([file('one.txt')], '5 B'),
       'list?source=cache': listOf([file('cache.bin')], '1 KB')
@@ -4921,7 +4934,7 @@ describe('row tooltip', () => {
 
     const row = rows(widget)[rowNames(widget).indexOf('cache.bin')];
     expect(row.dataset.source).toBe('cache');
-    expect(lastLine(row)).toBe('Trash: /home/cache on /mnt/data');
+    expect(lastLine(row)).toBe('Trash: /mnt/data/.Trash-1000');
   });
 
   // DEF-PANEL-49-ROW-TIP
@@ -4937,7 +4950,7 @@ describe('row tooltip', () => {
 
     const row = rows(widget)[rowNames(widget).indexOf('one.txt')];
     expect(row.dataset.source).toBeUndefined();
-    expect(lastLine(row)).toBe('Trash: HOME on /');
+    expect(lastLine(row)).toBe('Trash: /home/lab/.local/share/Trash');
   });
 
   // DEF-PANEL-49-ROW-TIP
@@ -4947,7 +4960,7 @@ describe('row tooltip', () => {
     openBand(widget, 'cache');
 
     const row = sectionRows(widget, 'cache')[0];
-    expect(lastLine(row)).toBe('Trash: /home/cache on /');
+    expect(lastLine(row)).toBe('Trash: /home/cache');
   });
 
   // DEF-PANEL-49-ROW-TIP
@@ -4971,7 +4984,7 @@ describe('row tooltip', () => {
 
     const after = rows(widget)[0];
     expect(after.title.split('\n')).toHaveLength(5);
-    expect(lastLine(after)).toBe('Trash: HOME on /');
+    expect(lastLine(after)).toBe('Trash: /home/lab/.local/share/Trash');
   });
 
   // DEF-PANEL-49-ROW-TIP
@@ -4996,7 +5009,7 @@ describe('row tooltip', () => {
 
     const after = rows(widget)[0];
     expect(after.title.split('\n')).toHaveLength(5);
-    expect(lastLine(after)).toBe('Trash: HOME on /');
+    expect(lastLine(after)).toBe('Trash: /home/lab/.local/share/Trash');
   });
 
   // DEF-PANEL-50-TIP-LOCALE

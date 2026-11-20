@@ -186,7 +186,7 @@ interface ITrashSource {
   total_size: string;
   total_bytes: number;
   error: string;
-  mountpoint: string;
+  location: string;
 }
 
 interface ICleanSourceResult {
@@ -339,7 +339,7 @@ export class TrashWidget extends Widget {
   private _pullDir: 1 | -1 = 1;
   // The open entries box's height at rest, held through the gesture
   private _base = 0;
-  private _give = 44;
+  private _give = 48;
   private _leave: ISectionSide | null = null;
   private _enter: ISectionSide | null = null;
   private _enterTarget = 0;
@@ -1678,9 +1678,8 @@ export class TrashWidget extends Widget {
     text.textContent = error
       ? trans.__('%1: %2', source.label, error)
       : source.label;
-    // The ellipsis can hide the label's end; the tooltip carries all of it
-    // and names the volume holding the trash
-    text.title = trans.__('%1 on %2', text.textContent, source.mountpoint);
+    // The tooltip names the exact trash folder
+    text.title = source.location;
     if (error) {
       parts.label.replaceChildren(text);
       parts.list?.replaceChildren();
@@ -2212,7 +2211,7 @@ export class TrashWidget extends Widget {
     ];
     // The sources answer may not have arrived yet; no line beats 'undefined'
     if (entry !== undefined) {
-      lines.push(`Trash: ${entry.label} on ${entry.mountpoint}`);
+      lines.push(`Trash: ${entry.location}`);
     }
     return lines.join('\n');
   }
